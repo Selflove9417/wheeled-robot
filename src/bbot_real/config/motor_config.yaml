@@ -1,0 +1,58 @@
+# ============================================================
+# BBot 实机 — 电机与控制器配置
+# ============================================================
+
+# ---- IMU ----
+imu_topic: "/imu/data"        # WitMotion IMU
+
+# ---- CAN总线（波特率通过外部 ip link 配置）----
+can:
+  interface: "can0"
+
+# ---- 关节电机（RV系列伺服，髋/膝）----
+# 协议: 模式0x00 级联PID位置控制
+# 帧格式: [模式|KP, KP|KD, KD, 位置H, 位置L, 速度H, 速度L|扭矩H, 扭矩L]
+joint_motors:
+  left_hip:
+    id: 1
+    torque_limit: 75.0        # 髋关节峰值75Nm
+    inverted: false
+  left_knee:
+    id: 2
+    torque_limit: 60.0        # 膝关节峰值60Nm
+    inverted: false
+  right_hip:
+    id: 3
+    torque_limit: 75.0
+    inverted: false
+  right_knee:
+    id: 4
+    torque_limit: 60.0
+    inverted: false
+
+# ---- 轮毂电机（TODO: 协议待补充）----
+wheel_motors:
+  left:
+    id: 4
+    pole_count: 14
+    current_limit: 7000       # mA
+    inverted: false
+  right:
+    id: 3
+    pole_count: 14
+    current_limit: 7000
+    inverted: false
+
+# ---- 机器人物理参数 ----
+robot:
+  wheel_radius: 0.07
+  wheel_separation: 0.40
+  L_MIN: 0.30                # 最小虚拟腿长 (m)
+  L_MAX: 0.47                # 最大虚拟腿长 (m)
+  l1: 0.30                   # 小腿长
+  l2: 0.30                   # 大腿长
+  l3: 0.10                   # 髋→上身质心
+  m0: 4.00                   # 轮子质量
+  m1: 1.60                   # 小腿质量
+  m2: 2.40                   # 大腿质量
+  m3: 14.0                   # 上身质量

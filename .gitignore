@@ -1,0 +1,22 @@
+# ROS2 build and install artifacts
+build/
+install/
+log/
+COLCON_IGNORE
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data logs (raw data logs, while keeping configuration and scripts)
+src/bbot_real/src/data_logs/*.txt
+src/bbot_real_lock/src/data_logs/*.txt
+
