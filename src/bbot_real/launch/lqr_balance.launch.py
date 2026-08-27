@@ -47,6 +47,14 @@ def generate_launch_description():
         'target_height', default_value='0.36',
         description='Nominal standing height (m)'
     )
+    ki_pos_angle_arg = DeclareLaunchArgument(
+        'ki_pos_angle', default_value='0.02',
+        description='Position-to-pitch integral trim gain'
+    )
+    max_pos_trim_angle_arg = DeclareLaunchArgument(
+        'max_pos_trim_angle', default_value='0.035',
+        description='Max pitch trim angle limit (rad)'
+    )
 
     lqr_node = Node(
         package='bbot_real',
@@ -61,6 +69,8 @@ def generate_launch_description():
             'roll_offset': LaunchConfiguration('roll_offset'),
             'roll_sign': LaunchConfiguration('roll_sign'),
             'target_height': LaunchConfiguration('target_height'),
+            'ki_pos_angle': LaunchConfiguration('ki_pos_angle'),
+            'max_pos_trim_angle': LaunchConfiguration('max_pos_trim_angle'),
         }],
         output='screen',
     )
@@ -74,5 +84,7 @@ def generate_launch_description():
         roll_offset_arg,
         roll_sign_arg,
         target_height_arg,
+        ki_pos_angle_arg,
+        max_pos_trim_angle_arg,
         lqr_node,
     ])

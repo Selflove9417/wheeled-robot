@@ -93,6 +93,14 @@ public:
         RCLCPP_INFO(this->get_logger(), "Roll补偿配置: Kp=%.2f Ki=%.3f Kd=%.3f offset=%.3f sign=%.1f max_dh=%.3f",
                     roll_kp_, roll_ki_, roll_kd_, roll_offset_, roll_sign_, max_delta_h_);
 
+        // 位置积分微调物理重心平衡角参数
+        this->declare_parameter<double>("ki_pos_angle", 0.02);
+        this->declare_parameter<double>("max_pos_trim_angle", 0.035);
+        ki_pos_angle_ = this->get_parameter("ki_pos_angle").as_double();
+        max_pos_trim_angle_ = this->get_parameter("max_pos_trim_angle").as_double();
+        RCLCPP_INFO(this->get_logger(), "位置积分微调角度配置: Ki_pos_angle=%.4f max_trim=%.3f rad",
+                    ki_pos_angle_, max_pos_trim_angle_);
+
         // 初始化上一帧有效关节角度（防止初始为0导致突变）
         bbot_real::IKSolution init_ik = kinematics_.inverse_kinematics(current_height_, 0.0, 0.0);
         last_valid_hip_l_ = -init_ik.theta_hip;
@@ -416,6 +424,7 @@ private:
             vel_integral_ = 0.0;
             pos_integral_ = 0.0;
             roll_integral_ = 0.0;
+            pos_trim_angle_ = 0.0;
             startup_elapsed_ = 0.0;
             standup_done_ = false;
 
@@ -430,6 +439,7 @@ private:
             vel_integral_ = 0.0;
             pos_integral_ = 0.0;
             roll_integral_ = 0.0;
+            pos_trim_angle_ = 0.0;
             wheel_over_speed_ = false; // 清除超速标志
             balance_offset_auto_ = balance_offset_;
 
@@ -442,19 +452,21 @@ private:
             joints_enabled_ = true;
         }
 
-        // ================== 重心零偏在线自适应 (适度增益) ==================
-        if (target_speed_const_ == 0.0 && standup_done_)
-        {
-            // 适度步长在线寻优重心，杜绝长期漂移
-            balance_offset_auto_ += x_dot_ * ki_vel_trim_ * dt;
-            balance_offset_auto_ = clamp_value(balance_offset_auto_,
-                                               balance_offset_ - 0.04,
-                                               balance_offset_ + 0.04);
-        }
-        else
-        {
-            balance_offset_auto_ = balance_offset_;
-        }
+        // // ================== 重心零偏在线自适应 (适度增益) ==================
+        // if (target_speed_const_ == 0.0 && standup_done_)
+        // {
+        //     // 适度步长在线寻优重心，杜绝长期漂移
+        //     balance_offset_auto_ += x_dot_ * ki_vel_trim_ * dt;
+        //     balance_offset_auto_ = clamp_value(balance_offset_auto_,
+        //                                        balance_offset_ - 0.04,
+        //                                        balance_offset_ + 0.04);
+        // }
+        // else
+        // {
+        //     balance_offset_auto_ = balance_offset_;
+        // }
+
+        balance_offset_auto_ = balance_offset_;
 
         double dynamic_target_pitch = balance_offset_auto_;
 
@@ -498,28 +510,31 @@ private:
             // ================== 标准全状态 LQR (静止自平衡) ==================
             if (standup_done_)
             {
-                // 微幅积分仅消除静摩擦死区，严防积分过大引起低频晃荡
-                pos_integral_ += pos_error * dt;
-                pos_integral_ = clamp_value(pos_integral_, -0.5, 0.5);
+                // 位置积分微调目标俯仰角（车往前偏 pos_error > 0 时向后微仰，车往后退 pos_error < 0 时向前微俯）
+                pos_trim_angle_ -= ki_pos_angle_ * pos_error * dt;
+                pos_trim_angle_ = clamp_value(pos_trim_angle_, -max_pos_trim_angle_, max_pos_trim_angle_);
             }
             else
             {
-                pos_integral_ = 0.0;
+                pos_trim_angle_ = 0.0;
             }
 
+            dynamic_target_pitch = balance_offset_ + pos_trim_angle_;
             double theta_error = pitch_ - dynamic_target_pitch;
 
-            // 纯状态反馈：使用温和的 k_i_pos_ (0.2)
+            // 纯全状态 LQR 反馈控制（由目标角度积分彻底消除稳态位置误差）
             u_pitch = -(current_gain_.k_x * pos_error +
                         current_gain_.k_x_dot * vel_error +
                         current_gain_.k_theta * theta_error +
-                        current_gain_.k_theta_dot * gyro_val +
-                        k_i_pos_ * pos_integral_);
+                        current_gain_.k_theta_dot * gyro_val);
             vel_integral_ = 0.0;
+            pos_integral_ = 0.0;
         }
         else
         {
             // ================== 运动模式：速度外环 + 姿态 LQR ==================
+            pos_trim_angle_ = 0.0; // 运动时清零微调量
+
             double vel_error_v = target_speed_smoothed_ - x_dot_;
             vel_integral_ += vel_error_v * dt;
             vel_integral_ = clamp_value(vel_integral_, -0.5, 0.5);
@@ -572,10 +587,9 @@ private:
 
         double roll_err_deg = (roll_target_ + roll_offset_ - roll_) * 180.0 / M_PI;
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 150,
-                             "[LQR] pit=%.2f° torq=%.2f | roll=%.2f° err=%.2f° dh=%.1fmm h=%.3f(%.3f,%.3f)",
-                             pitch_ * 180.0 / M_PI, total_torque,
-                             roll_ * 180.0 / M_PI, roll_err_deg,
-                             last_delta_h_ * 1000.0, current_height_, last_h_left_, last_h_right_);
+                             "[LQR] pit=%.2f°(targ=%.2f° trim=%.2f°) torq=%.2f | roll=%.2f° dh=%.1fmm h=%.3f",
+                             pitch_ * 180.0 / M_PI, dynamic_target_pitch * 180.0 / M_PI, pos_trim_angle_ * 180.0 / M_PI,
+                             total_torque, roll_ * 180.0 / M_PI, last_delta_h_ * 1000.0, current_height_);
     }
 
     void update_leg_height(double dt)
@@ -793,9 +807,14 @@ private:
 
     // 平衡与定点积分参数
     double balance_offset_, balance_offset_auto_;
-    double k_i_pos_ = 0.2; // 降到 0.2，消除相位滞后
+    double k_i_pos_ = -0.8;
     double pos_integral_ = 0.0;
     bool standup_done_ = false;
+
+    // 位置积分微调物理重心平衡角
+    double ki_pos_angle_ = 0.02;        // 积分增益 (rad/(m*s))
+    double max_pos_trim_angle_ = 0.035; // 最大微调幅度 (约 ±2.0 度)
+    double pos_trim_angle_ = 0.0;       // 实时角度微调量 (rad)
 
     double ki_vel_trim_ = 0.02;
 

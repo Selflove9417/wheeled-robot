@@ -37,8 +37,6 @@ cansend can0 123#DEADBEEF
 ls /dev/ttyCH341USB*
 ---
 
-
-
 ---
 
 单腿测试
@@ -87,3 +85,59 @@ ros2 launch wit_ros2_imu rviz_and_imu.launch.py
 
 启动遥控器
 ros2 run bbot_rc_receiver rc_node
+
+---
+日常更新和提交代码的标准流程如下：
+
+**1. 查看本地修改状态**
+
+```bash
+git status
+
+```
+
+*用于确认哪些文件被修改、添加或删除。*
+
+---
+
+**2. 添加修改到暂存区**
+
+```bash
+# 添加所有修改和新文件
+git add .
+
+# 或者只添加特定文件/目录
+git add src/your_file.cpp
+
+```
+
+---
+
+**3. 提交修改并添加说明**
+
+```bash
+git commit -m "更新说明（例如：修改平衡控制算法参数）"
+
+```
+
+---
+
+**4. 推送到远程 GitHub 仓库**
+
+```bash
+git push
+
+```
+
+*(日常更新直接使用 `git push` 即可，不需要再加 `-u` 或 `-f` 强推参数)*
+
+---
+
+**日常协作/多端开发时的补充操作：**
+
+如果在其他电脑上也有修改，在本地修改前先拉取远程最新代码以避免冲突：
+
+```bash
+git pull
+
+```
