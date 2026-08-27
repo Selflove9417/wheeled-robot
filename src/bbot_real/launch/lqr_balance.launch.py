@@ -1,90 +1,85 @@
-#!/usr/bin/env python3
-"""
-LQR Balance Controller — Standalone Launch
-==========================================
-Launches only the LQR balance controller (no IMU or RC node).
-
-Usage:
-  ros2 launch bbot_real lqr_balance.launch.py can_interface:=can0
-"""
-
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-
 def generate_launch_description():
-    can_interface_arg = DeclareLaunchArgument(
-        'can_interface', default_value='can0',
-        description='SocketCAN interface name'
-    )
-    imu_topic_arg = DeclareLaunchArgument(
-        'imu_topic', default_value='/imu/data',
-        description='IMU data topic'
-    )
-    roll_kp_arg = DeclareLaunchArgument(
-        'roll_kp', default_value='0.35',
+    # 1. 声明参数并赋予默认值（防止缺失参数报错）
+    declare_roll_kp = DeclareLaunchArgument(
+        'roll_kp',
+        default_value='0.35',
         description='Roll compensation P gain'
     )
-    roll_ki_arg = DeclareLaunchArgument(
-        'roll_ki', default_value='0.08',
+    declare_roll_ki = DeclareLaunchArgument(
+        'roll_ki',
+        default_value='0.08',
         description='Roll compensation I gain'
     )
-    roll_kd_arg = DeclareLaunchArgument(
-        'roll_kd', default_value='0.015',
+    declare_roll_kd = DeclareLaunchArgument(
+        'roll_kd',
+        default_value='0.015',
         description='Roll compensation D gain'
     )
-    roll_offset_arg = DeclareLaunchArgument(
-        'roll_offset', default_value='0.0',
-        description='Roll angle mechanical zero offset (rad)'
+    declare_roll_offset = DeclareLaunchArgument(
+        'roll_offset',
+        default_value='0.0',
+        description='Roll mechanical offset angle (rad)'
     )
-    roll_sign_arg = DeclareLaunchArgument(
-        'roll_sign', default_value='1.0',
+    declare_roll_sign = DeclareLaunchArgument(
+        'roll_sign',
+        default_value='-1.0',
         description='Roll compensation direction sign (+1.0 or -1.0)'
     )
-    target_height_arg = DeclareLaunchArgument(
-        'target_height', default_value='0.36',
-        description='Nominal standing height (m)'
+    declare_max_delta_h = DeclareLaunchArgument(
+        'max_delta_h',
+        default_value='0.04',
+        description='Max leg height delta for roll compensation (m)'
     )
-    ki_pos_angle_arg = DeclareLaunchArgument(
-        'ki_pos_angle', default_value='0.02',
-        description='Position-to-pitch integral trim gain'
+    declare_target_height = DeclareLaunchArgument(
+        'target_height',
+        default_value='0.43',
+        description='Target standing height (m)'
     )
-    max_pos_trim_angle_arg = DeclareLaunchArgument(
-        'max_pos_trim_angle', default_value='0.035',
-        description='Max pitch trim angle limit (rad)'
+    declare_leg_mode = DeclareLaunchArgument(
+        'leg_control_mode',
+        default_value='servo',
+        description='Leg control mode (servo or hybrid)'
+    )
+    declare_can_interface = DeclareLaunchArgument(
+        'can_interface',
+        default_value='can0',
+        description='CAN interface device name'
     )
 
+    # 2. 控制器节点
     lqr_node = Node(
         package='bbot_real',
         executable='lqr_balance_controller',
         name='lqr_balance_controller',
+        output='screen',
         parameters=[{
-            'can_interface': LaunchConfiguration('can_interface'),
-            'imu_topic': LaunchConfiguration('imu_topic'),
             'roll_kp': LaunchConfiguration('roll_kp'),
             'roll_ki': LaunchConfiguration('roll_ki'),
             'roll_kd': LaunchConfiguration('roll_kd'),
             'roll_offset': LaunchConfiguration('roll_offset'),
             'roll_sign': LaunchConfiguration('roll_sign'),
+            'max_delta_h': LaunchConfiguration('max_delta_h'),
             'target_height': LaunchConfiguration('target_height'),
-            'ki_pos_angle': LaunchConfiguration('ki_pos_angle'),
-            'max_pos_trim_angle': LaunchConfiguration('max_pos_trim_angle'),
-        }],
-        output='screen',
+            'leg_control_mode': LaunchConfiguration('leg_control_mode'),
+            'can_interface': LaunchConfiguration('can_interface'),
+        }]
     )
 
     return LaunchDescription([
-        can_interface_arg,
-        imu_topic_arg,
-        roll_kp_arg,
-        roll_ki_arg,
-        roll_kd_arg,
-        roll_offset_arg,
-        roll_sign_arg,
-        target_height_arg,
-        ki_pos_angle_arg,
-        max_pos_trim_angle_arg,
-        lqr_node,
+        declare_roll_kp,
+        declare_roll_ki,
+        declare_roll_kd,
+        declare_roll_offset,
+        declare_roll_sign,
+        declare_max_delta_h,
+        declare_target_height,
+        declare_leg_mode,
+        declare_can_interface,
+        lqr_node
     ])

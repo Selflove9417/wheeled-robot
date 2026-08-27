@@ -33,7 +33,7 @@ def generate_launch_description():
             'imu_topic': LaunchConfiguration('imu_topic'),
             'wheel_radius': 0.07,
             'wheel_base': 0.4,
-            'max_wheel_speed': 2.5,
+            'max_wheel_speed': 3.0,
         }],
         output='screen',
     )

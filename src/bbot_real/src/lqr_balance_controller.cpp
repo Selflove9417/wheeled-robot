@@ -52,13 +52,13 @@ public:
     {
         // LQR 增益配置（下蹲 / 站立）
         gain_low_ = {-6.6675, -25.4334, -129.9416, -35.4267};
-        gain_high_ = {-3.2828, -94.5782, -417.9190, -100.6307};
+        gain_high_ = {-6.3650, -48.5719, -227.1942, -57.6391};
         current_gain_ = gain_high_;
 
         // 平衡与重心参数
-        balance_offset_ = 2.195 * 3.14 / 180;
+        balance_offset_ = -0.77 * 3.14 / 180;
         balance_offset_auto_ = balance_offset_;
-        ki_vel_trim_ = 0.02; // 自适应在线学习步长
+        ki_vel_trim_ = 0.0;
         cmd_scale_ = 1.0;
         cmd_sign_ = -1.0;
         max_cmd_x_ = 10.0;
@@ -94,7 +94,7 @@ public:
                     roll_kp_, roll_ki_, roll_kd_, roll_offset_, roll_sign_, max_delta_h_);
 
         // 位置积分微调物理重心平衡角参数
-        this->declare_parameter<double>("ki_pos_angle", 0.02);
+        this->declare_parameter<double>("ki_pos_angle", 0.0);
         this->declare_parameter<double>("max_pos_trim_angle", 0.035);
         ki_pos_angle_ = this->get_parameter("ki_pos_angle").as_double();
         max_pos_trim_angle_ = this->get_parameter("max_pos_trim_angle").as_double();
@@ -501,7 +501,7 @@ private:
         }
 
         double pos_error = x_ - target_x_;
-        double vel_error = x_dot_ - 0.0;
+        double vel_error = -x_dot_ + 0.0;
         double gyro_val = pitch_rate_;
         double u_pitch = 0.0;
 
@@ -511,7 +511,7 @@ private:
             if (standup_done_)
             {
                 // 位置积分微调目标俯仰角（车往前偏 pos_error > 0 时向后微仰，车往后退 pos_error < 0 时向前微俯）
-                pos_trim_angle_ -= ki_pos_angle_ * pos_error * dt;
+                pos_trim_angle_ -= ki_pos_angle_ * vel_error * dt;
                 pos_trim_angle_ = clamp_value(pos_trim_angle_, -max_pos_trim_angle_, max_pos_trim_angle_);
             }
             else
@@ -812,7 +812,7 @@ private:
     bool standup_done_ = false;
 
     // 位置积分微调物理重心平衡角
-    double ki_pos_angle_ = 0.02;        // 积分增益 (rad/(m*s))
+    double ki_pos_angle_ = 0.0;         // 积分增益 (rad/(m*s))
     double max_pos_trim_angle_ = 0.035; // 最大微调幅度 (约 ±2.0 度)
     double pos_trim_angle_ = 0.0;       // 实时角度微调量 (rad)
 

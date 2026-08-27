@@ -17,6 +17,8 @@ ros2 launch bbot_real bringup.launch.py controller:=lqr
 ## 4. 或单独启动PID控制器
 
 ros2 launch bbot_real pid_balance.launch.py
+
+
 ros2 launch bbot_real pid_balance.launch.py can_interface:=can0
 
 ---

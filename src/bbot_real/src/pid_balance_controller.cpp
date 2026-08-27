@@ -69,7 +69,7 @@ public:
                                              gyro_stand.ramp, gyro_stand.limit);
 
         // 平衡参数
-        balance_offset_ = 0.008;
+        balance_offset_ = -0.25 * 3.14 / 180;
         cmd_sign_ = 1.0;
         max_cmd_x_ = 10.0;
         max_safe_pitch_ = 0.40; // 22.9°
@@ -79,9 +79,9 @@ public:
         speed_ramp_time_ = 1.0;
 
         L_MIN_ = 0.30;
-        L_MAX_ = 0.40;
-        current_height_ = L_MAX_;
-        target_height_ = L_MAX_;
+        L_MAX_ = 0.45;
+        current_height_ = 0.40;
+        target_height_ = 0.40;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
         // 初始化上一帧有效关节角度（防止初始为0导致突变）
@@ -146,7 +146,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "轮毂半径: %.3f m", wheel_radius_);
 
         // 轮速超限保护阈值
-        this->declare_parameter<double>("max_wheel_speed", 3.0);
+        this->declare_parameter<double>("max_wheel_speed", 10.0);
         max_wheel_speed_ = this->get_parameter("max_wheel_speed").as_double();
         RCLCPP_INFO(this->get_logger(), "轮速超限保护阈值: %.3f m/s", max_wheel_speed_);
 
@@ -461,7 +461,7 @@ private:
             else if (target_speed_smoothed_ > target_speed_const_)
                 target_speed_smoothed_ = std::max(target_speed_smoothed_ - ramp_step, target_speed_const_);
 
-            double vel_error = target_speed_smoothed_ - x_dot_;
+            double vel_error = -target_speed_smoothed_ + x_dot_;
             double target_pitch = pid_speed_(vel_error, dt_speed);
             target_pitch = clamp_value(target_pitch, -0.25, 0.25);
 
