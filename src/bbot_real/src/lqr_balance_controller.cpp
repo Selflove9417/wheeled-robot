@@ -70,34 +70,29 @@ public:
 
         L_MIN_ = 0.30;
         L_MAX_ = 0.45;
-        this->declare_parameter<double>("target_height", 0.43);
-        target_height_ = this->get_parameter("target_height").as_double();
+        target_height_ = 0.43;
         current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
-        // Roll 差动平衡补偿参数声明与初始化
-        this->declare_parameter<double>("roll_kp", 0.35);
-        this->declare_parameter<double>("roll_ki", 0.08);
-        this->declare_parameter<double>("roll_kd", 0.015);
-        this->declare_parameter<double>("roll_offset", 0.0);
-        this->declare_parameter<double>("roll_sign", 1.0);
-        this->declare_parameter<double>("max_delta_h", 0.04);
+        // Roll 差动平衡补偿参数
+        roll_kp_ = 0.35;
+        roll_ki_ = 0.08;
+        roll_kd_ = 0.015;
 
-        roll_kp_ = this->get_parameter("roll_kp").as_double();
-        roll_ki_ = this->get_parameter("roll_ki").as_double();
-        roll_kd_ = this->get_parameter("roll_kd").as_double();
-        roll_offset_ = this->get_parameter("roll_offset").as_double();
-        roll_sign_ = this->get_parameter("roll_sign").as_double();
-        max_delta_h_ = this->get_parameter("max_delta_h").as_double();
+        // roll_kp_ = 0.0;
+        // roll_ki_ = 0.0;
+        // roll_kd_ = 0.0;
+
+        roll_offset_ = 0.0 * 3.14 / 180.0;
+        roll_sign_ = 1.0;
+        max_delta_h_ = 0.04;
 
         RCLCPP_INFO(this->get_logger(), "Roll补偿配置: Kp=%.2f Ki=%.3f Kd=%.3f offset=%.3f sign=%.1f max_dh=%.3f",
                     roll_kp_, roll_ki_, roll_kd_, roll_offset_, roll_sign_, max_delta_h_);
 
         // 位置积分微调物理重心平衡角参数
-        this->declare_parameter<double>("ki_pos_angle", 0.0);
-        this->declare_parameter<double>("max_pos_trim_angle", 0.035);
-        ki_pos_angle_ = this->get_parameter("ki_pos_angle").as_double();
-        max_pos_trim_angle_ = this->get_parameter("max_pos_trim_angle").as_double();
+        ki_pos_angle_ = 0.0;
+        max_pos_trim_angle_ = 0.035;
         RCLCPP_INFO(this->get_logger(), "位置积分微调角度配置: Ki_pos_angle=%.4f max_trim=%.3f rad",
                     ki_pos_angle_, max_pos_trim_angle_);
 
@@ -109,8 +104,7 @@ public:
         last_valid_knee_r_ = -init_ik.theta_knee;
 
         // 腿部控制模式
-        this->declare_parameter<std::string>("leg_control_mode", "servo");
-        leg_mode_ = this->get_parameter("leg_control_mode").as_string();
+        leg_mode_ = "servo";
         RCLCPP_INFO(this->get_logger(), "腿部控制模式: %s", leg_mode_.c_str());
 
         leg_kp_ = 30.0f;
@@ -118,8 +112,7 @@ public:
 
         // CAN 总线初始化
         can_ = std::make_shared<bbot_real::CanInterface>();
-        this->declare_parameter<std::string>("can_interface", "can0");
-        std::string can_if = this->get_parameter("can_interface").as_string();
+        std::string can_if = "can0";
         try
         {
             can_->open(can_if);
@@ -131,15 +124,10 @@ public:
         }
 
         // 关节电机初始化
-        this->declare_parameter<int>("motor_left_hip_id", 1);
-        this->declare_parameter<int>("motor_left_knee_id", 2);
-        this->declare_parameter<int>("motor_right_hip_id", 3);
-        this->declare_parameter<int>("motor_right_knee_id", 4);
-
-        motor_left_hip_.init(can_, this->get_parameter("motor_left_hip_id").as_int(), 75.0);
-        motor_left_knee_.init(can_, this->get_parameter("motor_left_knee_id").as_int(), 60.0);
-        motor_right_hip_.init(can_, this->get_parameter("motor_right_hip_id").as_int(), 75.0);
-        motor_right_knee_.init(can_, this->get_parameter("motor_right_knee_id").as_int(), 60.0);
+        motor_left_hip_.init(can_, 1, 75.0);
+        motor_left_knee_.init(can_, 2, 60.0);
+        motor_right_hip_.init(can_, 3, 75.0);
+        motor_right_knee_.init(can_, 4, 60.0);
 
         motor_left_hip_.enable();
         motor_left_knee_.enable();
@@ -148,23 +136,23 @@ public:
         joints_enabled_ = true;
 
         // 轮毂驱动器初始化
-        this->declare_parameter<int>("wheel_node_id", 5);
-        wheel_node_id_ = this->get_parameter("wheel_node_id").as_int();
+        wheel_node_id_ = 5;
         wheel_.init(can_, wheel_node_id_);
         if (can_->is_open() && !wheel_.enable())
             RCLCPP_WARN(this->get_logger(), "轮毂电机使能失败，请检查驱动器");
         RCLCPP_INFO(this->get_logger(), "轮毂电机 node=%d", wheel_node_id_);
 
-        this->declare_parameter<double>("wheel_radius", 0.07);
-        wheel_radius_ = this->get_parameter("wheel_radius").as_double();
-        this->declare_parameter<double>("max_wheel_speed", 3.0);
-        max_wheel_speed_ = this->get_parameter("max_wheel_speed").as_double();
+        wheel_radius_ = 0.07;
+        max_wheel_speed_ = 3.0;
 
         // 话题订阅与发布
-        this->declare_parameter<std::string>("imu_topic", "/imu/data");
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            this->get_parameter("imu_topic").as_string(), 10,
+            "/imu/data", 10,
             std::bind(&LQRBalanceController::imu_callback, this, std::placeholders::_1));
+
+        joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
+            "/rc_input", 10,
+            std::bind(&LQRBalanceController::joy_callback, this, std::placeholders::_1));
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
             "/diff_drive_controller/cmd_vel", 10);
@@ -328,6 +316,69 @@ private:
                 x_dot_ = low_pass_filter(current_x_dot, x_dot_, 0.50);
             }
         }
+    }
+
+    // ==================== 遥控器回调 ====================
+    void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
+    {
+        if (msg->axes.size() < 3 || msg->buttons.size() < 3)
+            return;
+
+        double ly_roll = msg->axes[0];  // 转向
+        double lx_pitch = msg->axes[1]; // 前进/后退
+        double aux1 = msg->axes[2];     // 腿高度
+        int aux2_btn = msg->buttons[2]; // 急停按钮
+
+        // 急停
+        if (aux2_btn == 1)
+        {
+            is_emergency_stopped_ = true;
+            target_speed_const_ = 0.0;
+            target_yaw_rate_ = 0.0;
+            target_x_ = x_;
+            was_moving_ = false;
+            vel_integral_ = 0.0;
+            pos_integral_ = 0.0;
+            pos_trim_angle_ = 0.0;
+            return;
+        }
+
+        if (is_emergency_stopped_)
+        {
+            is_emergency_stopped_ = false;
+            wheel_over_speed_ = false;
+            RCLCPP_INFO(this->get_logger(), "急停按钮已释放，等待安全角度后重新使能电机");
+        }
+
+        // 死区处理 (死区阈值 0.05，死区外线性归一化平滑过渡)
+        const double deadzone = 0.05;
+        // 速度控制 (前进/后退)
+        if (std::abs(lx_pitch) > deadzone)
+        {
+            double sign = (lx_pitch > 0.0) ? 1.0 : -1.0;
+            double scaled = (std::abs(lx_pitch) - deadzone) / (1.0 - deadzone);
+            target_speed_const_ = sign * scaled * walk_speed_;
+        }
+        else
+        {
+            target_speed_const_ = 0.0;
+        }
+
+        // 转向控制 (左转/右转)
+        if (std::abs(ly_roll) > deadzone)
+        {
+            double sign = (ly_roll > 0.0) ? 1.0 : -1.0;
+            double scaled = (std::abs(ly_roll) - deadzone) / (1.0 - deadzone);
+            target_yaw_rate_ = -sign * scaled * turn_speed_;
+        }
+        else
+        {
+            target_yaw_rate_ = 0.0;
+        }
+
+        // 腿高度控制 (aux1: -1.0 ~ +1.0 线性映射到 L_MIN_ ~ L_MAX_)
+        double height_cmd = L_MIN_ + ((aux1 + 1.0) / 2.0) * (L_MAX_ - L_MIN_);
+        target_height_ = clamp_value(height_cmd, L_MIN_, L_MAX_);
     }
 
     void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -759,6 +810,7 @@ private:
 
     // ROS 话题通信
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr leg_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -778,7 +830,7 @@ private:
     double roll_rate_alpha_ = 0.80;
 
     double roll_target_ = 0.0;
-    double roll_offset_ = 2.0 * 3.14 / 180.0; // 机械零偏手动/参数补偿 (rad)
+    double roll_offset_ = 0.0 * 3.14 / 180.0; // 机械零偏手动/参数补偿 (rad)
     double roll_sign_ = -1.0;                 // 补偿方向极性切换系数 (+1.0 或 -1.0)
     double roll_kp_ = 0.35;                   // 比例增益 (提升至 0.35)
     double roll_ki_ = 0.08;                   // 积分增益 (消除稳态静差)

@@ -69,7 +69,7 @@ public:
                                              gyro_stand.ramp, gyro_stand.limit);
 
         // 平衡参数
-        balance_offset_ = -0.25 * 3.14 / 180;
+        balance_offset_ = -0.60 * 3.14 / 180;
         cmd_sign_ = 1.0;
         max_cmd_x_ = 10.0;
         max_safe_pitch_ = 0.40; // 22.9°
@@ -80,9 +80,23 @@ public:
 
         L_MIN_ = 0.30;
         L_MAX_ = 0.45;
-        current_height_ = 0.40;
-        target_height_ = 0.40;
+        target_height_ = 0.43;
+        current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
+
+        // Roll 差动平衡补偿参数 (与 LQR 保持一致)
+        roll_kp_ = 0.35;
+        roll_ki_ = 0.08;
+        roll_kd_ = 0.015;
+        roll_offset_ = 0.0 * 3.14 / 180.0;
+
+        roll_target_ = -1.0 * 3.14 / 180.0;
+
+        roll_sign_ = 1.0;
+        max_delta_h_ = 0.04;
+
+        RCLCPP_INFO(this->get_logger(), "Roll补偿配置: Kp=%.2f Ki=%.3f Kd=%.3f offset=%.3f sign=%.1f max_dh=%.3f",
+                    roll_kp_, roll_ki_, roll_kd_, roll_offset_, roll_sign_, max_delta_h_);
 
         // 初始化上一帧有效关节角度（防止初始为0导致突变）
         bbot_real::IKSolution init_ik = kinematics_.inverse_kinematics(L_MAX_, 0.0, 0.0);
@@ -92,8 +106,7 @@ public:
         last_valid_knee_r_ = -init_ik.theta_knee;
 
         // 腿部控制模式
-        this->declare_parameter<std::string>("leg_control_mode", "servo");
-        leg_mode_ = this->get_parameter("leg_control_mode").as_string();
+        leg_mode_ = "servo";
         RCLCPP_INFO(this->get_logger(), "腿部控制模式: %s", leg_mode_.c_str());
 
         // 力位混合控制参数（仅 hybrid 模式使用）
@@ -102,8 +115,7 @@ public:
 
         // CAN总线
         can_ = std::make_shared<bbot_real::CanInterface>();
-        this->declare_parameter<std::string>("can_interface", "can0");
-        std::string can_if = this->get_parameter("can_interface").as_string();
+        std::string can_if = "can0";
         try
         {
             can_->open(can_if);
@@ -116,15 +128,10 @@ public:
         }
 
         // 关节电机初始化
-        this->declare_parameter<int>("motor_left_hip_id", 1);
-        this->declare_parameter<int>("motor_left_knee_id", 2);
-        this->declare_parameter<int>("motor_right_hip_id", 3);
-        this->declare_parameter<int>("motor_right_knee_id", 4);
-
-        motor_left_hip_.init(can_, this->get_parameter("motor_left_hip_id").as_int(), 75.0);
-        motor_left_knee_.init(can_, this->get_parameter("motor_left_knee_id").as_int(), 60.0);
-        motor_right_hip_.init(can_, this->get_parameter("motor_right_hip_id").as_int(), 75.0);
-        motor_right_knee_.init(can_, this->get_parameter("motor_right_knee_id").as_int(), 60.0);
+        motor_left_hip_.init(can_, 1, 75.0);
+        motor_left_knee_.init(can_, 2, 60.0);
+        motor_right_hip_.init(can_, 3, 75.0);
+        motor_right_knee_.init(can_, 4, 60.0);
 
         // 使能所有关节电机
         motor_left_hip_.enable();
@@ -133,28 +140,28 @@ public:
         motor_right_knee_.enable();
 
         // 轮毂电机（ZLAC CANopen双轴驱动器）
-        this->declare_parameter<int>("wheel_node_id", 5);
-        wheel_node_id_ = this->get_parameter("wheel_node_id").as_int();
+        wheel_node_id_ = 5;
         wheel_.init(can_, wheel_node_id_);
         if (can_->is_open() && !wheel_.enable())
             RCLCPP_WARN(this->get_logger(), "轮毂电机使能失败，请检查ZLAC驱动器");
         RCLCPP_INFO(this->get_logger(), "轮毂电机 ZLAC node=%d", wheel_node_id_);
 
         // 轮毂物理参数
-        this->declare_parameter<double>("wheel_radius", 0.07); // 默认 70mm
-        wheel_radius_ = this->get_parameter("wheel_radius").as_double();
+        wheel_radius_ = 0.07; // 默认 70mm
         RCLCPP_INFO(this->get_logger(), "轮毂半径: %.3f m", wheel_radius_);
 
         // 轮速超限保护阈值
-        this->declare_parameter<double>("max_wheel_speed", 10.0);
-        max_wheel_speed_ = this->get_parameter("max_wheel_speed").as_double();
+        max_wheel_speed_ = 10.0;
         RCLCPP_INFO(this->get_logger(), "轮速超限保护阈值: %.3f m/s", max_wheel_speed_);
 
         // 订阅与发布
-        this->declare_parameter<std::string>("imu_topic", "/imu/data");
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            this->get_parameter("imu_topic").as_string(), 10,
+            "/imu/data", 10,
             std::bind(&PIDBalanceController::imu_callback, this, std::placeholders::_1));
+
+        joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
+            "/rc_input", 10,
+            std::bind(&PIDBalanceController::joy_callback, this, std::placeholders::_1));
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
             "/diff_drive_controller/cmd_vel", 10);
@@ -333,6 +340,68 @@ private:
         }
     }
 
+    // ==================== 遥控器回调 ====================
+    void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
+    {
+        if (msg->axes.size() < 3 || msg->buttons.size() < 3)
+            return;
+
+        double ly_roll = msg->axes[0];  // 转向
+        double lx_pitch = msg->axes[1]; // 前进/后退
+        double aux1 = msg->axes[2];     // 腿高度
+        int aux2_btn = msg->buttons[2]; // 急停按钮
+
+        // 急停
+        if (aux2_btn == 1)
+        {
+            is_emergency_stopped_ = true;
+            target_speed_const_ = 0.0;
+            target_yaw_rate_ = 0.0;
+
+            pid_speed_.reset();
+            pid_angle_.reset();
+            pid_gyro_.reset();
+            return;
+        }
+
+        if (is_emergency_stopped_)
+        {
+            is_emergency_stopped_ = false;
+            wheel_over_speed_ = false;
+            RCLCPP_INFO(this->get_logger(), "急停按钮已释放，等待安全角度后重新使能电机");
+        }
+
+        // 死区处理 (死区阈值 0.05，死区外线性归一化平滑过渡)
+        const double deadzone = 0.05;
+        // 速度控制 (前进/后退)
+        if (std::abs(lx_pitch) > deadzone)
+        {
+            double sign = (lx_pitch > 0.0) ? 1.0 : -1.0;
+            double scaled = (std::abs(lx_pitch) - deadzone) / (1.0 - deadzone);
+            target_speed_const_ = sign * scaled * walk_speed_;
+        }
+        else
+        {
+            target_speed_const_ = 0.0;
+        }
+
+        // 转向控制 (左转/右转)
+        if (std::abs(ly_roll) > deadzone)
+        {
+            double sign = (ly_roll > 0.0) ? 1.0 : -1.0;
+            double scaled = (std::abs(ly_roll) - deadzone) / (1.0 - deadzone);
+            target_yaw_rate_ = -sign * scaled * turn_speed_;
+        }
+        else
+        {
+            target_yaw_rate_ = 0.0;
+        }
+
+        // 腿高度控制 (aux1: -1.0 ~ +1.0 线性映射到 L_MIN_ ~ L_MAX_)
+        double height_cmd = L_MIN_ + ((aux1 + 1.0) / 2.0) * (L_MAX_ - L_MIN_);
+        target_height_ = clamp_value(height_cmd, L_MIN_, L_MAX_);
+    }
+
     void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
     {
         RCLCPP_INFO_ONCE(this->get_logger(), "已成功接收到第一帧 IMU 数据！");
@@ -410,6 +479,15 @@ private:
         if (startup_elapsed_ > leg_startup_ramp_time_)
             startup_elapsed_ = leg_startup_ramp_time_;
 
+        if (!standup_done_)
+        {
+            if (startup_elapsed_ >= leg_startup_ramp_time_)
+            {
+                standup_done_ = true;
+                RCLCPP_INFO(this->get_logger(), "机器人站立就绪 (PID Controller)");
+            }
+        }
+
         // 安全停机
         if (std::abs(pitch_) > max_safe_pitch_ || is_emergency_stopped_ || wheel_over_speed_)
         {
@@ -427,7 +505,9 @@ private:
             pid_angle_.reset();
             pid_gyro_.reset();
 
+            roll_integral_ = 0.0;
             startup_elapsed_ = 0.0;
+            standup_done_ = false;
 
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500, "急停...");
             return;
@@ -444,6 +524,8 @@ private:
                 motor_right_hip_.enable();
                 motor_right_knee_.enable();
                 joints_enabled_ = true;
+                roll_integral_ = 0.0;
+                wheel_over_speed_ = false;
             }
         }
 
@@ -483,7 +565,7 @@ private:
 
         publish_cmd(cmd_x, target_yaw_rate_);
         send_wheel_can(cmd_x, target_yaw_rate_);
-        send_leg_can();
+        send_leg_can(dt);
 
         if (logging_enabled_)
         {
@@ -515,8 +597,8 @@ private:
         }
 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100,
-                             "[PID] pitch=%.3f vel=%.2f cmd=%.2f h=%.3f",
-                             pitch_, x_dot_, cmd_x, current_height_);
+                             "[PID] pitch=%.3f vel=%.2f cmd=%.2f | roll=%.2f° dh=%.1fmm h=%.3f",
+                             pitch_, x_dot_, cmd_x, roll_ * 180.0 / M_PI, last_delta_h_ * 1000.0, current_height_);
     }
 
     void update_leg_height(double dt)
@@ -540,7 +622,7 @@ private:
         double r = height_ratio();
 
         pid_speed_.P = lerp(0.0f, 0.13f, r);
-        pid_speed_.I = lerp(0.0f, 0.0f, r);
+        pid_speed_.I = lerp(0.0f, 0.01f, r);
         pid_speed_.D = lerp(0.0f, 0.0f, r);
         pid_speed_.limit = lerp(0.45f, 0.50f, r);
 
@@ -555,22 +637,40 @@ private:
         pid_gyro_.limit = lerp(0.0f, 10.0f, r);
     }
 
-    void send_leg_can()
+    // 腿部关节驱动与 Roll 姿态差动高度补偿
+    void send_leg_can(double dt)
     {
-        // Roll 平衡补偿高度差计算
-        double roll_error = roll_target_ - roll_;
-        double delta_h = roll_kp_ * roll_error - roll_kd_ * roll_rate_;
-        delta_h = clamp_value(delta_h, -max_delta_h_, max_delta_h_);
+        // 目标 Roll 叠加机械零偏补偿 roll_offset_
+        double effective_target_roll = roll_target_ + roll_offset_;
+        double roll_error = effective_target_roll - roll_;
 
-        // 左右腿高度分配（保留 0.015m 的安全几何裕量，防止 acos(>1) 导致 NaN）
-        double max_safe_h = L_MAX_ - 0.015;
-        double h_left = clamp_value(current_height_ - delta_h, L_MIN_, max_safe_h);
-        double h_right = clamp_value(current_height_ + delta_h, L_MIN_, max_safe_h);
+        // 仅在站立就绪且正常使能时累积积分，防止开机/摔倒积分饱和
+        if (standup_done_ && joints_enabled_)
+        {
+            roll_integral_ += roll_error * dt;
+            roll_integral_ = clamp_value(roll_integral_, -roll_integral_limit_, roll_integral_limit_);
+        }
+        else
+        {
+            roll_integral_ = 0.0;
+        }
+
+        // 计算差动高度补偿量（PI+D，带方向符号系数 roll_sign_）
+        double raw_delta_h = (roll_kp_ * roll_error + roll_ki_ * roll_integral_ - roll_kd_ * roll_rate_) * roll_sign_;
+        double delta_h = clamp_value(raw_delta_h, -max_delta_h_, max_delta_h_);
+        last_delta_h_ = delta_h;
+
+        // 左右腿高度分配（保留 0.005m 的安全几何裕量，防止 acos(>1) 奇异）
+        double max_safe_h = L_MAX_ - 0.005;
+        double h_left = clamp_value(current_height_, L_MIN_, max_safe_h);
+        double h_right = clamp_value(current_height_ - delta_h, L_MIN_, max_safe_h);
+        last_h_left_ = h_left;
+        last_h_right_ = h_right;
 
         double ratio_l = clamp_value((h_left - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
         double ratio_r = clamp_value((h_right - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
-        double x_off_l = lerp(0.0, 0.065, ratio_l);
-        double x_off_r = lerp(0.0, 0.055, ratio_r);
+        double x_off_l = lerp(0.0, 0.075, ratio_l);
+        double x_off_r = lerp(0.0, 0.065, ratio_r);
 
         // 逆运动学求解
         bbot_real::IKSolution ik_l = kinematics_.inverse_kinematics(h_left, 0.0, x_off_l);
@@ -681,6 +781,7 @@ private:
 
     // 订阅/发布
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr leg_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -700,9 +801,17 @@ private:
     double roll_rate_alpha_ = 0.80;
 
     double roll_target_ = 0.0;
-    double roll_kp_ = 0.15;
-    double roll_kd_ = 0.01;
-    double max_delta_h_ = 0.04;
+    double roll_offset_ = 0.0 * 3.14 / 180.0; // 机械零偏手动/参数补偿 (rad)
+    double roll_sign_ = 1.0;                  // 补偿方向极性切换系数 (+1.0 或 -1.0)
+    double roll_kp_ = 0.35;                   // 比例增益 (提升至 0.35)
+    double roll_ki_ = 0.08;                   // 积分增益 (消除稳态静差)
+    double roll_kd_ = 0.015;                  // 微分阻尼增益
+    double roll_integral_ = 0.0;
+    double roll_integral_limit_ = 0.20; // 积分饱和限幅 (rad*s)
+    double max_delta_h_ = 0.04;         // 最大高度差 (m)
+    double last_delta_h_ = 0.0;
+    double last_h_left_ = 0.36;
+    double last_h_right_ = 0.36;
 
     // 记忆上一次有效关节角度（防止 NaN 导致看门狗超时）
     double last_valid_hip_l_ = 0.0;
@@ -733,6 +842,7 @@ private:
     double L_MIN_, L_MAX_, current_height_, target_height_, leg_transition_speed_;
     double leg_startup_ramp_time_ = 5.0;
     double startup_elapsed_ = 0.0;
+    bool standup_done_ = false;
 
     // 腿部控制
     std::string leg_mode_;
