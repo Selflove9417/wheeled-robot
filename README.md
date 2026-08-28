@@ -1,7 +1,9 @@
+
 # 启动命令
 ## 1. CAN总线初始化（启动时执行一次）
 
 sudo ip link set can0 up type can bitrate 1000000
+
 
 ## 2. 编译
 
@@ -142,4 +144,31 @@ git push
 ```bash
 git pull
 
+```
+
+ros2 run foxglove_bridge foxglove_bridge
+
+实际前进速度	/bbot/telemetry.data[0]
+
+目标前进速度	/bbot/telemetry.data[1]
+
+实际俯仰角 (Pitch)	/bbot/telemetry.data[2]
+
+目标俯仰角 (Pitch)	/bbot/telemetry.data[3]
+
+实际角速度 (Pitch Rate)	/bbot/telemetry.data[4]
+
+目标角速度 (Pitch Rate)	/bbot/telemetry.data[5]
+
+左轮电流 (mA)	/bbot/telemetry.data[6]
+
+右轮电流 (取反后 mA)	/bbot/telemetry.data[7]
+
+电机1: 左髋力矩	/bbot/telemetry.data[8]
+
+电机2: 左膝力矩	/bbot/telemetry.data[9]
+
+电机3: 右髋力矩	/bbot/telemetry.data[10]
+
+电机4: 右膝力矩 (取反)	/bbot/telemetry.data[11]
 ```

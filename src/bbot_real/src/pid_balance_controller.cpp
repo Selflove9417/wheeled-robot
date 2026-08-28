@@ -69,7 +69,7 @@ public:
                                              gyro_stand.ramp, gyro_stand.limit);
 
         // 平衡参数
-        balance_offset_ = -0.60 * 3.14 / 180;
+        balance_offset_ = -2.0 * 3.14 / 180;
         cmd_sign_ = 1.0;
         max_cmd_x_ = 10.0;
         max_safe_pitch_ = 0.40; // 22.9°
@@ -90,7 +90,7 @@ public:
         roll_kd_ = 0.015;
         roll_offset_ = 0.0 * 3.14 / 180.0;
 
-        roll_target_ = -1.0 * 3.14 / 180.0;
+        roll_target_ = 0.5 * 3.14 / 180.0;
 
         roll_sign_ = 1.0;
         max_delta_h_ = 0.04;
@@ -167,6 +167,9 @@ public:
             "/diff_drive_controller/cmd_vel", 10);
         leg_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/leg_position_controller/commands", 10);
+
+        telemetry_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/bbot/telemetry", 10);
 
         // 控制定时器 200Hz
         timer_ = this->create_wall_timer(5ms, std::bind(&PIDBalanceController::control_loop, this));
@@ -567,6 +570,24 @@ private:
         send_wheel_can(cmd_x, target_yaw_rate_);
         send_leg_can(dt);
 
+        std_msgs::msg::Float64MultiArray telem_msg;
+        telem_msg.data = {
+            x_dot_,                              // [0] 实际前进速度 (m/s)
+            target_speed_smoothed_,              // [1] 目标速度 (m/s)
+            pitch_,                              // [2] 实际俯仰角 Pitch (rad)
+            target_pitch_filtered_,              // [3] 目标俯仰角 (rad)
+            pitch_rate_,                         // [4] 实际角速度 Pitch Rate (rad/s)
+            target_pitch_rate_,                  // [5] 目标角速度 (rad/s)
+            left_cmd_ma_,                        // [6] 左轮电机电流 (mA)
+            -right_cmd_ma_,                      // [7] 右轮电机电流(取反) (mA)
+            motor_left_hip_.torque_feedback(),   // [8] 关节1: 左Hip力矩 (Nm)
+            motor_left_knee_.torque_feedback(),  // [9] 关节2: 左Knee力矩 (Nm)
+            motor_right_hip_.torque_feedback(),  // [10] 关节3: 右Hip力矩 (Nm)
+            -motor_right_knee_.torque_feedback() // [11] 关节4: 右Knee力矩(取反) (Nm)
+        };
+
+        telemetry_pub_->publish(telem_msg);
+
         if (logging_enabled_)
         {
             double t = now.nanoseconds() * 1e-9;
@@ -621,8 +642,8 @@ private:
         // 动态根据当前腿高比例进行增益插值
         double r = height_ratio();
 
-        pid_speed_.P = lerp(0.0f, 0.13f, r);
-        pid_speed_.I = lerp(0.0f, 0.01f, r);
+        pid_speed_.P = lerp(0.0f, 0.12f, r);
+        pid_speed_.I = lerp(0.0f, 0.05f, r);
         pid_speed_.D = lerp(0.0f, 0.0f, r);
         pid_speed_.limit = lerp(0.45f, 0.50f, r);
 
@@ -662,7 +683,7 @@ private:
 
         // 左右腿高度分配（保留 0.005m 的安全几何裕量，防止 acos(>1) 奇异）
         double max_safe_h = L_MAX_ - 0.005;
-        double h_left = clamp_value(current_height_, L_MIN_, max_safe_h);
+        double h_left = clamp_value(current_height_ + delta_h, L_MIN_, max_safe_h);
         double h_right = clamp_value(current_height_ - delta_h, L_MIN_, max_safe_h);
         last_h_left_ = h_left;
         last_h_right_ = h_right;
@@ -784,6 +805,9 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr leg_pub_;
+
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr telemetry_pub_;
+
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Time last_time_;
 

@@ -56,7 +56,7 @@ public:
         current_gain_ = gain_high_;
 
         // 平衡与重心参数
-        balance_offset_ = -0.77 * 3.14 / 180;
+        balance_offset_ = -0.8 * 3.14 / 180;
         balance_offset_auto_ = balance_offset_;
         ki_vel_trim_ = 0.0;
         cmd_scale_ = 1.0;
@@ -83,6 +83,7 @@ public:
         // roll_ki_ = 0.0;
         // roll_kd_ = 0.0;
 
+        roll_target_ = 0.5 * 3.14 / 180.0;
         roll_offset_ = 0.0 * 3.14 / 180.0;
         roll_sign_ = 1.0;
         max_delta_h_ = 0.04;
@@ -143,7 +144,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "轮毂电机 node=%d", wheel_node_id_);
 
         wheel_radius_ = 0.07;
-        max_wheel_speed_ = 3.0;
+        max_wheel_speed_ = 5.0;
 
         // 话题订阅与发布
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
