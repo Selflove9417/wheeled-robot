@@ -51,12 +51,16 @@ public:
         : Node("lqr_balance_controller")
     {
         // LQR 增益配置（下蹲 / 站立）
-        gain_low_ = {-6.6675, -25.4334, -129.9416, -35.4267};
+        gain_low_ = {-6.1624, -46.8436, -197.6985, -46.8109};
         gain_high_ = {-6.3650, -48.5719, -227.1942, -57.6391};
         current_gain_ = gain_high_;
 
         // 平衡与重心参数
-        balance_offset_ = -0.8 * 3.14 / 180;
+        // 平衡参数
+        balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
+        balance_offset_max_ = -0.8 * M_PI / 180.0; // 站立时的平衡角
+
+        balance_offset_ = 0.0; // 当前插值后的动态偏置
         balance_offset_auto_ = balance_offset_;
         ki_vel_trim_ = 0.0;
         cmd_scale_ = 1.0;
@@ -70,7 +74,7 @@ public:
 
         L_MIN_ = 0.30;
         L_MAX_ = 0.45;
-        target_height_ = 0.43;
+        target_height_ = 0.30;
         current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
@@ -557,6 +561,10 @@ private:
         double gyro_val = pitch_rate_;
         double u_pitch = 0.0;
 
+        double r = height_ratio();
+
+        balance_offset_ = lerp(balance_offset_min_, balance_offset_max_, r);
+
         if (target_speed_const_ == 0.0 && std::abs(target_speed_smoothed_) < 0.005)
         {
             // ================== 标准全状态 LQR (静止自平衡) ==================
@@ -700,8 +708,8 @@ private:
 
         double ratio_l = clamp_value((h_left - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
         double ratio_r = clamp_value((h_right - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
-        double x_off_l = lerp(0.0, 0.075, ratio_l);
-        double x_off_r = lerp(0.0, 0.065, ratio_r);
+        double x_off_l = lerp(0.078, 0.075, ratio_l);
+        double x_off_r = lerp(0.068, 0.065, ratio_r);
 
         // 逆运动学求解
         bbot_real::IKSolution ik_l = kinematics_.inverse_kinematics(h_left, 0.0, x_off_l);
@@ -859,7 +867,12 @@ private:
     LQRGain gain_low_, gain_high_, current_gain_;
 
     // 平衡与定点积分参数
-    double balance_offset_, balance_offset_auto_;
+    // 平衡参数
+    double balance_offset_min_ = -3.0 * M_PI / 180.0; // 蹲伏时的平衡角
+    double balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
+    double balance_offset_ = 0.0;                     // 当前插值后的动态偏置
+
+    double balance_offset_auto_;
     double k_i_pos_ = -0.8;
     double pos_integral_ = 0.0;
     bool standup_done_ = false;

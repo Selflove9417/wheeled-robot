@@ -69,7 +69,9 @@ public:
                                              gyro_stand.ramp, gyro_stand.limit);
 
         // 平衡参数
-        balance_offset_ = -2.0 * 3.14 / 180;
+        balance_offset_min_ = -3.9 * M_PI / 180.0; // 蹲伏时的平衡角
+        balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
+
         cmd_sign_ = 1.0;
         max_cmd_x_ = 10.0;
         max_safe_pitch_ = 0.40; // 22.9°
@@ -80,14 +82,14 @@ public:
 
         L_MIN_ = 0.30;
         L_MAX_ = 0.45;
-        target_height_ = 0.43;
+        target_height_ = 0.30;
         current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
         // Roll 差动平衡补偿参数 (与 LQR 保持一致)
-        roll_kp_ = 0.35;
+        roll_kp_ = 0.60;
         roll_ki_ = 0.08;
-        roll_kd_ = 0.015;
+        roll_kd_ = 0.025;
         roll_offset_ = 0.0 * 3.14 / 180.0;
 
         roll_target_ = 0.5 * 3.14 / 180.0;
@@ -642,20 +644,37 @@ private:
         // 动态根据当前腿高比例进行增益插值
         double r = height_ratio();
 
-        pid_speed_.P = lerp(0.0f, 0.12f, r);
-        pid_speed_.I = lerp(0.0f, 0.05f, r);
+        balance_offset_ = lerp(balance_offset_min_, balance_offset_max_, r);
+
+        pid_speed_.P = lerp(0.10f, 0.15f, r);
+        pid_speed_.I = lerp(0.01f, 0.05f, r);
         pid_speed_.D = lerp(0.0f, 0.0f, r);
         pid_speed_.limit = lerp(0.45f, 0.50f, r);
 
-        pid_angle_.P = lerp(0.0f, 5.0f, r);
+        pid_angle_.P = lerp(5.0f, 6.0f, r);
         pid_angle_.I = lerp(0.0f, 0.0f, r);
-        pid_angle_.D = lerp(0.0f, 0.0f, r);
-        pid_angle_.limit = lerp(0.0f, 5.0f, r);
+        pid_angle_.D = lerp(0.0f, 0.05f, r);
+        pid_angle_.limit = lerp(3.0f, 5.0f, r);
 
-        pid_gyro_.P = lerp(0.0f, 30.0f, r);
+        pid_gyro_.P = lerp(25.0f, 30.0f, r);
         pid_gyro_.I = lerp(0.0f, 0.0f, r);
         pid_gyro_.D = lerp(0.0f, 0.0f, r);
-        pid_gyro_.limit = lerp(0.0f, 10.0f, r);
+        pid_gyro_.limit = lerp(10.0f, 10.0f, r);
+
+        // pid_speed_.P = lerp(0.0f, 0.0f, r);
+        // pid_speed_.I = lerp(0.0f, 0.0f, r);
+        // pid_speed_.D = lerp(0.0f, 0.0f, r);
+        // pid_speed_.limit = lerp(0.45f, 0.50f, r);
+
+        // pid_angle_.P = lerp(0.0f, 0.0f, r);
+        // pid_angle_.I = lerp(0.0f, 0.0f, r);
+        // pid_angle_.D = lerp(0.0f, 0.0f, r);
+        // pid_angle_.limit = lerp(0.0f, 5.0f, r);
+
+        // pid_gyro_.P = lerp(0.0f, 0.0f, r);
+        // pid_gyro_.I = lerp(0.0f, 0.0f, r);
+        // pid_gyro_.D = lerp(0.0f, 0.0f, r);
+        // pid_gyro_.limit = lerp(0.0f, 10.0f, r);
     }
 
     // 腿部关节驱动与 Roll 姿态差动高度补偿
@@ -690,8 +709,8 @@ private:
 
         double ratio_l = clamp_value((h_left - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
         double ratio_r = clamp_value((h_right - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
-        double x_off_l = lerp(0.0, 0.075, ratio_l);
-        double x_off_r = lerp(0.0, 0.065, ratio_r);
+        double x_off_l = lerp(0.080, 0.077, ratio_l);
+        double x_off_r = lerp(0.070, 0.067, ratio_r);
 
         // 逆运动学求解
         bbot_real::IKSolution ik_l = kinematics_.inverse_kinematics(h_left, 0.0, x_off_l);
@@ -851,11 +870,16 @@ private:
     double max_wheel_speed_;
 
     // 平衡参数
-    double balance_offset_, cmd_sign_ = 1.0, max_cmd_x_, max_safe_pitch_;
+    double balance_offset_min_ = -3.0 * M_PI / 180.0; // 蹲伏时的平衡角
+    double balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
+    double balance_offset_ = 0.0;                     // 当前插值后的动态偏置
+
+    double cmd_sign_ = 1.0, max_cmd_x_, max_safe_pitch_;
     double target_pitch_filtered_ = 0.0;
+
     double target_pitch_rate_ = 0.0;
     unsigned int loop_tick_ = 0;
-    double target_pitch_alpha_ = 0.80;
+    double target_pitch_alpha_ = 0.90;
 
     // 遥控指令
     double target_speed_const_ = 0.0, target_speed_smoothed_ = 0.0;
