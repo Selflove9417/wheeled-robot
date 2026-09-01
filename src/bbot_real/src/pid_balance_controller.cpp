@@ -80,9 +80,12 @@ public:
         turn_speed_ = 0.5;
         speed_ramp_time_ = 1.0;
 
-        L_MIN_ = 0.30;
-        L_MAX_ = 0.45;
-        target_height_ = 0.30;
+        const auto &robot_params = kinematics_.params();
+
+        L_MIN_ = robot_params.L_MIN;
+        L_MAX_ = robot_params.L_MAX;
+
+        target_height_ = L_MIN_;
         current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
@@ -130,10 +133,10 @@ public:
         }
 
         // 关节电机初始化
-        motor_left_hip_.init(can_, 1, 75.0);
-        motor_left_knee_.init(can_, 2, 60.0);
-        motor_right_hip_.init(can_, 3, 75.0);
-        motor_right_knee_.init(can_, 4, 60.0);
+        motor_left_hip_.init(can_, 1, robot_params.hip_torque_max);
+        motor_left_knee_.init(can_, 2, robot_params.knee_torque_max);
+        motor_right_hip_.init(can_, 3, robot_params.hip_torque_max);
+        motor_right_knee_.init(can_, 4, robot_params.knee_torque_max);
 
         // 使能所有关节电机
         motor_left_hip_.enable();
@@ -149,7 +152,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "轮毂电机 ZLAC node=%d", wheel_node_id_);
 
         // 轮毂物理参数
-        wheel_radius_ = 0.07; // 默认 70mm
+        wheel_radius_ = robot_params.wheel_radius;
         RCLCPP_INFO(this->get_logger(), "轮毂半径: %.3f m", wheel_radius_);
 
         // 轮速超限保护阈值

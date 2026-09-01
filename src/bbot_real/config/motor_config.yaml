@@ -48,7 +48,7 @@ robot:
   wheel_radius: 0.07
   wheel_separation: 0.40
   L_MIN: 0.30                # 最小虚拟腿长 (m)
-  L_MAX: 0.47                # 最大虚拟腿长 (m)
+  L_MAX: 0.45                # 最大虚拟腿长 (m)
   l1: 0.30                   # 小腿长
   l2: 0.30                   # 大腿长
   l3: 0.10                   # 髋→上身质心

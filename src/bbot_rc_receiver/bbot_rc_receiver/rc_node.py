@@ -24,9 +24,12 @@ class CRSFNode(Node):
             10
         )
 
+        serial_port = "/dev/ttyCH341USB1"
+        serial_baudrate = 420000
+
         serial_cfg = SerialConfig(
-            port="/dev/ttyCH341USB1",
-            baudrate=420000
+            port=serial_port,
+            baudrate=serial_baudrate
         )
 
         self.port = SerialPort(serial_cfg)
@@ -72,7 +75,7 @@ class CRSFNode(Node):
             self.port.open()
 
         self.get_logger().info(
-            "CRSF Receiver started on /dev/ttyUSB0 @ 420000"
+            f"CRSF Receiver started on {serial_port} @ {serial_baudrate}"
         )
 
         self.timer = self.create_timer(

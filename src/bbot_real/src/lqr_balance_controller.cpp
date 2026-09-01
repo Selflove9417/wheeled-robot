@@ -72,9 +72,12 @@ public:
         turn_speed_ = 0.5;
         speed_ramp_time_ = 1.0;
 
-        L_MIN_ = 0.30;
-        L_MAX_ = 0.45;
-        target_height_ = 0.30;
+        const auto &robot_params = kinematics_.params();
+
+        L_MIN_ = robot_params.L_MIN;
+        L_MAX_ = robot_params.L_MAX;
+
+        target_height_ = L_MIN_;
         current_height_ = target_height_;
         leg_transition_speed_ = (L_MAX_ - L_MIN_) / 4.0;
 
@@ -129,10 +132,17 @@ public:
         }
 
         // 关节电机初始化
-        motor_left_hip_.init(can_, 1, 75.0);
-        motor_left_knee_.init(can_, 2, 60.0);
-        motor_right_hip_.init(can_, 3, 75.0);
-        motor_right_knee_.init(can_, 4, 60.0);
+        motor_left_hip_.init(
+            can_, 1, robot_params.hip_torque_max);
+
+        motor_left_knee_.init(
+            can_, 2, robot_params.knee_torque_max);
+
+        motor_right_hip_.init(
+            can_, 3, robot_params.hip_torque_max);
+
+        motor_right_knee_.init(
+            can_, 4, robot_params.knee_torque_max);
 
         motor_left_hip_.enable();
         motor_left_knee_.enable();
@@ -140,14 +150,22 @@ public:
         motor_right_knee_.enable();
         joints_enabled_ = true;
 
-        // 轮毂驱动器初始化
         wheel_node_id_ = 5;
         wheel_.init(can_, wheel_node_id_);
-        if (can_->is_open() && !wheel_.enable())
-            RCLCPP_WARN(this->get_logger(), "轮毂电机使能失败，请检查驱动器");
-        RCLCPP_INFO(this->get_logger(), "轮毂电机 node=%d", wheel_node_id_);
 
-        wheel_radius_ = 0.07;
+        if (can_->is_open() && !wheel_.enable())
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "轮毂电机使能失败，请检查驱动器");
+        }
+
+        RCLCPP_INFO(
+            this->get_logger(),
+            "轮毂电机 node=%d",
+            wheel_node_id_);
+
+        wheel_radius_ = robot_params.wheel_radius;
         max_wheel_speed_ = 5.0;
 
         // 话题订阅与发布
