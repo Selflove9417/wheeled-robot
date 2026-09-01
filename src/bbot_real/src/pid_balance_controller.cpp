@@ -104,7 +104,7 @@ public:
                     roll_kp_, roll_ki_, roll_kd_, roll_offset_, roll_sign_, max_delta_h_);
 
         // 初始化上一帧有效关节角度（防止初始为0导致突变）
-        bbot_real::IKSolution init_ik = kinematics_.inverse_kinematics(L_MAX_, 0.0, 0.0);
+        bbot_real::IKSolution init_ik = kinematics_.inverse_kinematics(current_height_, 0.0, 0.0);
         last_valid_hip_l_ = -init_ik.theta_hip;
         last_valid_knee_l_ = -init_ik.theta_knee;
         last_valid_hip_r_ = -init_ik.theta_hip;

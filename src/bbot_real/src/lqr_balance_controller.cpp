@@ -719,7 +719,7 @@ private:
 
         // 左右腿高度分配（保留 0.005m 的安全几何裕量，防止 acos(>1) 奇异）
         double max_safe_h = L_MAX_ - 0.005;
-        double h_left = clamp_value(current_height_, L_MIN_, max_safe_h);
+        double h_left = clamp_value(current_height_ + delta_h, L_MIN_, max_safe_h);
         double h_right = clamp_value(current_height_ - delta_h, L_MIN_, max_safe_h);
         last_h_left_ = h_left;
         last_h_right_ = h_right;
