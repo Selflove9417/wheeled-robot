@@ -13,7 +13,7 @@ base_path = "/home/robot/bbot_real/src/bbot_real/src/data_logs/"
 # 时间显示范围 (单位: 秒)
 # ===============================
 TIME_START = 2.0
-TIME_END =80.0
+TIME_END = 50.0
 
 
 # ==============================================================================
@@ -27,11 +27,31 @@ def parse_encos_feedback(data_bytes: bytes) -> dict:
 
     info = {"frame_type": frame_type, "error_code": err_code}
     if frame_type == 1 and len(data_bytes) >= 8:
-        pos_raw = (data_bytes[1] << 8) | data_bytes[2]
-        spd_raw = (data_bytes[3] << 4) | (data_bytes[4] >> 4)
-        info["pos_rad"] = (pos_raw / 65535.0) * 25.0 - 12.5
-        info["spd_rad_s"] = (spd_raw / 4095.0) * 36.0 - 18.0
-        info["motor_temp"] = (data_bytes[6] - 50) / 2.0
+        pos_raw = (
+            (data_bytes[1] << 8) |
+            data_bytes[2]
+        )
+
+        spd_raw = (
+            (data_bytes[3] << 4) |
+            (data_bytes[4] >> 4)
+        )
+
+        info["pos_rad"] = (
+            (pos_raw / 65535.0) * 25.0 - 12.5
+        )
+
+        info["spd_rad_s"] = (
+            (spd_raw / 4095.0) * 36.0 - 18.0
+        )
+
+        info["motor_temp"] = (
+            data_bytes[6] - 50
+        ) / 2.0
+
+        info["mos_temp"] = (
+            data_bytes[7] - 50
+        ) / 2.0
     elif frame_type == 2 and len(data_bytes) >= 8:
         info["pos_deg"] = struct.unpack(">f", data_bytes[1:5])[0]
         info["current_a"] = struct.unpack(">h", data_bytes[5:7])[0] / 100.0
@@ -87,6 +107,36 @@ motor_files = {
     "motor2": get_motor_file("knee_left_torque.txt", "motor2_torque.txt"),
     "motor3": get_motor_file("hip_right_torque.txt", "motor3_torque.txt"),
     "motor4": get_motor_file("knee_right_torque.txt", "motor4_torque.txt"),
+    
+}
+
+temperature_files = {
+    "hip_left_motor":
+        base_path + "hip_left_motor_temp.txt",
+
+    "hip_left_mos":
+        base_path + "hip_left_mos_temp.txt",
+
+    "knee_left_motor":
+        base_path + "knee_left_motor_temp.txt",
+
+    "knee_left_mos":
+        base_path + "knee_left_mos_temp.txt",
+
+    "hip_right_motor":
+        base_path + "hip_right_motor_temp.txt",
+
+    "hip_right_mos":
+        base_path + "hip_right_mos_temp.txt",
+
+    "knee_right_motor":
+        base_path + "knee_right_motor_temp.txt",
+
+    "knee_right_mos":
+        base_path + "knee_right_mos_temp.txt",
+
+    "timestamp":
+        base_path + "timestamp_joint_temp.txt",
 }
 
 
@@ -165,6 +215,48 @@ def process_motor():
     motor["time"] = np.arange(n) * 0.005
     return motor
 
+def process_temperature():
+    temp = {}
+
+    for key, file_path in temperature_files.items():
+        if key == "timestamp":
+            continue
+
+        temp[key] = read_data(
+            file_path,
+            key.replace("_", " ")
+        )
+
+    t = read_data(
+        temperature_files["timestamp"],
+        "joint temperature time"
+    )
+
+    if len(t) == 0:
+        temp["time"] = np.array([])
+        return temp
+
+    valid_lengths = [len(t)]
+
+    for value in temp.values():
+        if len(value) > 0:
+            valid_lengths.append(len(value))
+
+    n = min(valid_lengths)
+
+    t = t[:n]
+
+    for key in list(temp.keys()):
+        temp[key] = temp[key][:n]
+
+    if len(t) > 1 and (t[-1] - t[0]) > 0.1:
+        t = t - t[0]
+    else:
+        t = np.arange(n) * 0.005
+
+    temp["time"] = t
+
+    return temp
 
 def auto_ylim(ax, x, y):
     if len(x) == 0 or len(y) == 0:
@@ -197,8 +289,9 @@ def main():
     gyro = process_dataset(gyro_files, "gyro")
     current = process_current()
     motor = process_motor()
+    temperature = process_temperature()
 
-    fig, axes = plt.subplots(5, 1, figsize=(16, 20), sharex=True)
+    fig, axes = plt.subplots(7, 1, figsize=(16, 20), sharex=True)
 
     # 1. 速度跟踪
     ax1 = axes[0]
@@ -246,6 +339,183 @@ def main():
     }
     colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"]
     invert_motors = ["motor4"]  # 将原本在零点下方的右侧关节力矩取反
+    
+        # ============================================================
+    # 6. 四关节电机线圈 / Motor 温度
+    # ============================================================
+
+    ax6 = axes[5]
+
+    temp_colors = {
+        "hip_left": "#e41a1c",
+        "knee_left": "#377eb8",
+        "hip_right": "#4daf4a",
+        "knee_right": "#984ea3",
+    }
+
+    if len(temperature["time"]) > 0:
+
+        ax6.plot(
+            temperature["time"],
+            temperature["hip_left_motor"],
+            label="Left Hip Motor",
+            color=temp_colors["hip_left"],
+            lw=1.6
+        )
+
+        ax6.plot(
+            temperature["time"],
+            temperature["knee_left_motor"],
+            label="Left Knee Motor",
+            color=temp_colors["knee_left"],
+            lw=1.8
+        )
+
+        ax6.plot(
+            temperature["time"],
+            temperature["hip_right_motor"],
+            label="Right Hip Motor",
+            color=temp_colors["hip_right"],
+            lw=1.6
+        )
+
+        ax6.plot(
+            temperature["time"],
+            temperature["knee_right_motor"],
+            label="Right Knee Motor",
+            color=temp_colors["knee_right"],
+            lw=1.8
+        )
+
+    # ENCOS：线圈温度从 105°C 开始进入降额区
+    ax6.axhline(
+        105.0,
+        color="orange",
+        linestyle="--",
+        lw=1.4,
+        label="Motor Derating Start (105 C)"
+    )
+
+    # 线圈最高保护温度
+    ax6.axhline(
+        120.0,
+        color="red",
+        linestyle="--",
+        lw=1.4,
+        label="Motor Shutdown (120 C)"
+    )
+
+    ax6.set_ylabel(
+        "Motor Temp (C)",
+        fontsize=11,
+        fontweight="bold"
+    )
+
+    ax6.set_title(
+        "Joint Motor Winding Temperature",
+        fontsize=13,
+        fontweight="bold"
+    )
+
+    ax6.legend(
+        loc="upper left",
+        ncol=2,
+        framealpha=0.9
+    )
+
+    ax6.grid(
+        True,
+        linestyle=":",
+        alpha=0.6
+    )
+    
+        # ============================================================
+    # 7. 四关节驱动 MOS 温度
+    # ============================================================
+
+    ax7 = axes[6]
+
+    if len(temperature["time"]) > 0:
+
+        ax7.plot(
+            temperature["time"],
+            temperature["hip_left_mos"],
+            label="Left Hip MOS",
+            color=temp_colors["hip_left"],
+            lw=1.6
+        )
+
+        ax7.plot(
+            temperature["time"],
+            temperature["knee_left_mos"],
+            label="Left Knee MOS",
+            color=temp_colors["knee_left"],
+            lw=1.8
+        )
+
+        ax7.plot(
+            temperature["time"],
+            temperature["hip_right_mos"],
+            label="Right Hip MOS",
+            color=temp_colors["hip_right"],
+            lw=1.6
+        )
+
+        ax7.plot(
+            temperature["time"],
+            temperature["knee_right_mos"],
+            label="Right Knee MOS",
+            color=temp_colors["knee_right"],
+            lw=1.8
+        )
+
+    # MOS 95°C 开始降额
+    ax7.axhline(
+        95.0,
+        color="orange",
+        linestyle="--",
+        lw=1.4,
+        label="MOS Derating Start (95 C)"
+    )
+
+    # MOS 110°C 停止
+    ax7.axhline(
+        110.0,
+        color="red",
+        linestyle="--",
+        lw=1.4,
+        label="MOS Shutdown (110 C)"
+    )
+
+    ax7.set_xlabel(
+        "Time (s)",
+        fontsize=11,
+        fontweight="bold"
+    )
+
+    ax7.set_ylabel(
+        "MOS Temp (C)",
+        fontsize=11,
+        fontweight="bold"
+    )
+
+    ax7.set_title(
+        "Joint Motor Driver MOS Temperature",
+        fontsize=13,
+        fontweight="bold"
+    )
+
+    ax7.legend(
+        loc="upper left",
+        ncol=2,
+        framealpha=0.9
+    )
+
+    ax7.grid(
+        True,
+        linestyle=":",
+        alpha=0.6
+    )
 
     plotted_motor_data = []
     for i in range(1, 5):
@@ -256,7 +526,6 @@ def main():
             ax5.plot(motor["time"], data_to_plot, label=motor_labels[key], color=colors[i - 1], lw=1.6)
             plotted_motor_data.append(data_to_plot)
 
-    ax5.set_xlabel("Time (s)", fontsize=11, fontweight="bold")
     ax5.set_ylabel("Torque (Nm)", fontsize=11, fontweight="bold")
     ax5.set_title("Joint Motors Feedback Torque (CAN Query 0x07/0x03)", fontsize=13, fontweight="bold")
     ax5.legend(loc="upper right", ncol=2, framealpha=0.9)

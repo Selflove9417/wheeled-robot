@@ -58,7 +58,7 @@ public:
         // 平衡与重心参数
         // 平衡参数
         balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
-        balance_offset_max_ = -0.8 * M_PI / 180.0; // 站立时的平衡角
+        balance_offset_max_ = -1.8 * M_PI / 180.0; // 站立时的平衡角
 
         balance_offset_ = 0.0; // 当前插值后的动态偏置
         balance_offset_auto_ = balance_offset_;
