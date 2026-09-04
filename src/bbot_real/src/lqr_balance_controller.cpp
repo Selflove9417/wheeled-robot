@@ -51,13 +51,13 @@ public:
         : Node("lqr_balance_controller")
     {
         // LQR 增益配置（下蹲 / 站立）
-        gain_low_ = {-6.1624, -46.8436, -197.6985, -46.8109};
-        gain_high_ = {-6.3650, -48.5719, -227.1942, -57.6391};
+        gain_low_ = {-6.0508, -45.9889, -179.1455, -42.5579};
+        gain_high_ = {-6.4278, -49.1705, -233.9199, -62.3271};
         current_gain_ = gain_high_;
 
         // 平衡与重心参数
         // 平衡参数
-        balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
+        balance_offset_min_ = -3.2 * M_PI / 180.0; // 蹲伏时的平衡角
         balance_offset_max_ = -1.8 * M_PI / 180.0; // 站立时的平衡角
 
         balance_offset_ = 0.0; // 当前插值后的动态偏置

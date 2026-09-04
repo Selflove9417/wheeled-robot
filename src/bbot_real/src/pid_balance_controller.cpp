@@ -73,7 +73,7 @@ public:
                                              gyro_stand.ramp, gyro_stand.limit);
 
         // 平衡参数
-        balance_offset_min_ = -3.9 * M_PI / 180.0; // 蹲伏时的平衡角
+        balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
         balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
 
         cmd_sign_ = 1.0;
@@ -218,6 +218,32 @@ public:
             log_knee_left_torque_.open(log_dir + "knee_left_torque.txt");
             log_hip_right_torque_.open(log_dir + "hip_right_torque.txt");
             log_knee_right_torque_.open(log_dir + "knee_right_torque.txt");
+
+            // ==================== 腿部诊断日志 ====================
+
+            log_current_height_.open(
+                log_dir + "current_height.txt");
+
+            log_left_leg_height_.open(
+                log_dir + "left_leg_height.txt");
+
+            log_right_leg_height_.open(
+                log_dir + "right_leg_height.txt");
+
+            log_knee_left_current_fb_.open(
+                log_dir + "knee_left_current_feedback.txt");
+
+            log_knee_right_current_fb_.open(
+                log_dir + "knee_right_current_feedback.txt");
+
+            log_knee_left_kt_.open(
+                log_dir + "knee_left_kt.txt");
+
+            log_knee_right_kt_.open(
+                log_dir + "knee_right_kt.txt");
+
+            log_timestamp_leg_diag_.open(
+                log_dir + "timestamp_leg_diag.txt");
 
             // ==================== 关节温度日志 ====================
 
@@ -969,18 +995,25 @@ private:
 
         std_msgs::msg::Float64MultiArray telem_msg;
         telem_msg.data = {
-            x_dot_,                              // [0] 实际前进速度 (m/s)
-            target_speed_smoothed_,              // [1] 目标速度 (m/s)
-            pitch_,                              // [2] 实际俯仰角 Pitch (rad)
-            target_pitch_filtered_,              // [3] 目标俯仰角 (rad)
-            pitch_rate_,                         // [4] 实际角速度 Pitch Rate (rad/s)
-            target_pitch_rate_,                  // [5] 目标角速度 (rad/s)
-            left_cmd_ma_,                        // [6] 左轮电机电流 (mA)
-            -right_cmd_ma_,                      // [7] 右轮电机电流(取反) (mA)
-            motor_left_hip_.torque_feedback(),   // [8] 关节1: 左Hip力矩 (Nm)
-            motor_left_knee_.torque_feedback(),  // [9] 关节2: 左Knee力矩 (Nm)
-            motor_right_hip_.torque_feedback(),  // [10] 关节3: 右Hip力矩 (Nm)
-            -motor_right_knee_.torque_feedback() // [11] 关节4: 右Knee力矩(取反) (Nm)
+            x_dot_,                               // [0] 实际前进速度 (m/s)
+            target_speed_smoothed_,               // [1] 目标速度 (m/s)
+            pitch_,                               // [2] 实际俯仰角 Pitch (rad)
+            target_pitch_filtered_,               // [3] 目标俯仰角 (rad)
+            pitch_rate_,                          // [4] 实际角速度 Pitch Rate (rad/s)
+            target_pitch_rate_,                   // [5] 目标角速度 (rad/s)
+            left_cmd_ma_,                         // [6] 左轮电机电流 (mA)
+            -right_cmd_ma_,                       // [7] 右轮电机电流(取反) (mA)
+            motor_left_hip_.torque_feedback(),    // [8] 关节1: 左Hip力矩 (Nm)
+            motor_left_knee_.torque_feedback(),   // [9] 关节2: 左Knee力矩 (Nm)
+            motor_right_hip_.torque_feedback(),   // [10] 关节3: 右Hip力矩 (Nm)
+            -motor_right_knee_.torque_feedback(), // [11] 关节4: 右Knee力矩(取反) (Nm)
+            current_height_,                      // [12]
+            last_h_left_,                         // [13]
+            last_h_right_,                        // [14]
+            motor_left_knee_.current_feedback(),  // [15]
+            motor_right_knee_.current_feedback(), // [16]
+            motor_left_knee_.torque_constant(),   // [17]
+            motor_right_knee_.torque_constant()   // [18]
         };
 
         telemetry_pub_->publish(telem_msg);
@@ -1012,6 +1045,32 @@ private:
             log_knee_left_torque_ << motor_left_knee_.torque_feedback() << "\n";
             log_hip_right_torque_ << motor_right_hip_.torque_feedback() << "\n";
             log_knee_right_torque_ << motor_right_knee_.torque_feedback() << "\n";
+
+            // ==================== 腿部诊断日志 ====================
+
+            log_current_height_
+                << current_height_ << "\n";
+
+            log_left_leg_height_
+                << last_h_left_ << "\n";
+
+            log_right_leg_height_
+                << last_h_right_ << "\n";
+
+            log_knee_left_current_fb_
+                << motor_left_knee_.current_feedback() << "\n";
+
+            log_knee_right_current_fb_
+                << motor_right_knee_.current_feedback() << "\n";
+
+            log_knee_left_kt_
+                << motor_left_knee_.torque_constant() << "\n";
+
+            log_knee_right_kt_
+                << motor_right_knee_.torque_constant() << "\n";
+
+            log_timestamp_leg_diag_
+                << t << "\n";
 
             // ==================== 温度日志 ====================
 
@@ -1098,10 +1157,10 @@ private:
         pid_angle_.D = lerp(0.0f, 0.05f, r);
         pid_angle_.limit = lerp(3.0f, 5.0f, r);
 
-        pid_gyro_.P = lerp(25.0f, 30.0f, r);
+        pid_gyro_.P = lerp(20.0f, 24.0f, r);
         pid_gyro_.I = lerp(0.0f, 0.0f, r);
         pid_gyro_.D = lerp(0.0f, 0.0f, r);
-        pid_gyro_.limit = lerp(10.0f, 10.0f, r);
+        pid_gyro_.limit = lerp(8.0f, 8.0f, r);
 
         // pid_speed_.P = lerp(0.0f, 0.0f, r);
         // pid_speed_.I = lerp(0.0f, 0.0f, r);
@@ -1527,6 +1586,18 @@ private:
     std::ofstream log_knee_right_mos_temp_;
 
     std::ofstream log_timestamp_joint_temp_;
+
+    std::ofstream log_current_height_;
+    std::ofstream log_left_leg_height_;
+    std::ofstream log_right_leg_height_;
+
+    std::ofstream log_knee_left_current_fb_;
+    std::ofstream log_knee_right_current_fb_;
+
+    std::ofstream log_knee_left_kt_;
+    std::ofstream log_knee_right_kt_;
+
+    std::ofstream log_timestamp_leg_diag_;
 
     bool logging_enabled_ = false;
 
