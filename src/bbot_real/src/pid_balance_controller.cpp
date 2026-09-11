@@ -43,6 +43,16 @@ static double lerp(double a, double b, double t)
     return a + (b - a) * t;
 }
 
+// 将角度误差限制到 [-pi, pi]，避免 Yaw 跨越 ±180° 时出现跳变
+static double wrap_angle(double angle)
+{
+    while (angle > M_PI)
+        angle -= 2.0 * M_PI;
+    while (angle < -M_PI)
+        angle += 2.0 * M_PI;
+    return angle;
+}
+
 // PID参数结构
 struct PIDParam
 {
@@ -72,6 +82,23 @@ public:
         pid_gyro_ = bbot_real::PIDController(gyro_stand.p, gyro_stand.i, gyro_stand.d,
                                              gyro_stand.ramp, gyro_stand.limit);
 
+        // ============================================================
+        // 转向控制：Heading 外环 + Yaw-rate 内环
+        //
+        // Heading PID 输出目标 Yaw 角速度 (rad/s)
+        // Yaw-rate PID 输出左右轮差动电流 (mA)
+        // ============================================================
+        PIDParam heading_pid = {3.0f, 0.0f, 0.005f, 0.0f, 0.35f};
+        PIDParam yaw_rate_pid = {500.0f, 20.0f, 5.0f, 0.0f, 800.0f};
+
+        pid_heading_ = bbot_real::PIDController(
+            heading_pid.p, heading_pid.i, heading_pid.d,
+            heading_pid.ramp, heading_pid.limit);
+
+        pid_yaw_ = bbot_real::PIDController(
+            yaw_rate_pid.p, yaw_rate_pid.i, yaw_rate_pid.d,
+            yaw_rate_pid.ramp, yaw_rate_pid.limit);
+
         // 平衡参数
         balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
         balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
@@ -80,9 +107,16 @@ public:
         max_cmd_x_ = 10.0;
         max_safe_pitch_ = 0.40; // 22.9°
 
-        walk_speed_ = 0.3;
+        walk_speed_ = 0.2;
         turn_speed_ = 0.5;
         speed_ramp_time_ = 1.0;
+
+        // 转向目标与闭环参数
+        yaw_cmd_sign_ = 1.0;
+        yaw_target_ramp_rate_ = 2.0;             // 目标 Yaw-rate 最大变化率 rad/s^2
+        yaw_rate_alpha_ = 0.20;                  // Yaw-rate 低通滤波系数
+        heading_deadband_ = 0.30 * M_PI / 180.0; // 航向误差死区 ±0.3°
+        keyboard_command_timeout_ = 0.35;        // WASD 最后一次按键后的自动归零时间
 
         const auto &robot_params = kinematics_.params();
 
@@ -98,10 +132,10 @@ public:
         roll_kp_ = 0.08;
         roll_ki_ = 0.0;
         roll_kd_ = 0.003;
-        roll_offset_ = -1.5 * M_PI / 180.0;
+        roll_offset_ = -4.5 * M_PI / 180.0;
 
         // IMU Roll=0 作为水平目标；若 IMU 安装有固定零偏，只调 roll_offset_。
-        roll_target_ = 0.0 * M_PI / 180.0;
+        roll_target_ = -2.0 * M_PI / 180.0;
 
         roll_sign_ = 1.0;
         max_delta_h_ = 0.015;       // 单侧最大差动腿长 15 mm
@@ -282,11 +316,23 @@ public:
         // ==================== 键盘控制初始化 ====================
         setup_keyboard();
 
+        if (keyboard_enabled_)
+        {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "键盘控制已启用：W前进 S后退 A左转 D右转 Space停止 | ↑升高 ↓降低");
+        }
+        else
+        {
+            RCLCPP_WARN(this->get_logger(), "键盘控制未启用：stdin 不是可交互终端");
+        }
+
         RCLCPP_INFO(
             this->get_logger(),
-            "键盘高度控制已启用：↑ 升高，↓ 降低");
+            "Heading+Yaw-rate双环: Heading Kp=%.2f | YawRate Kp=%.1f Ki=%.1f Kd=%.1f limit=%.0fmA",
+            pid_heading_.P, pid_yaw_.P, pid_yaw_.I, pid_yaw_.D, pid_yaw_.limit);
 
-        RCLCPP_INFO(this->get_logger(), "PID平衡控制器启动完成（遥控+位置控制模式）");
+        RCLCPP_INFO(this->get_logger(), "PID平衡控制器启动完成（WASD + Heading保持 + Yaw-rate闭环）");
     }
 
     ~PIDBalanceController()
@@ -608,7 +654,7 @@ private:
         // 速度控制 (前进/后退)
         if (std::abs(lx_pitch) > deadzone)
         {
-            double sign = (lx_pitch > 0.0) ? 1.0 : -1.0;
+            double sign = (lx_pitch > 0.0) ? -1.0 : 1.0;
             double scaled = (std::abs(lx_pitch) - deadzone) / (1.0 - deadzone);
             target_speed_const_ = sign * scaled * walk_speed_;
         }
@@ -617,16 +663,47 @@ private:
             target_speed_const_ = 0.0;
         }
 
-        // 转向控制 (左转/右转)
-        if (std::abs(ly_roll) > deadzone)
+        // ============================================================
+        // 遥控转向：人工 Yaw-rate + 直行 Heading Hold
+        // ============================================================
+
+        // 在 joy_callback 中修改：
+        const bool drive_cmd_active = std::abs(lx_pitch) > deadzone;
+        const bool turn_cmd_active = std::abs(ly_roll) > deadzone;
+
+        if (turn_cmd_active)
         {
             double sign = (ly_roll > 0.0) ? 1.0 : -1.0;
             double scaled = (std::abs(ly_roll) - deadzone) / (1.0 - deadzone);
             target_yaw_rate_ = -sign * scaled * turn_speed_;
+
+            heading_hold_enabled_ = false;
+            pid_heading_.reset();
+            rc_turn_active_ = true; // 标记正在主动转向
         }
         else
         {
             target_yaw_rate_ = 0.0;
+
+            // 只有当“之前正在转向，现在松开了转向摇杆”或者“刚推前进还没锁定时”，才锁定航向
+            if (rc_turn_active_)
+            {
+                rc_turn_active_ = false; // 立即清除标志
+                if (drive_cmd_active)
+                {
+                    capture_current_heading(); // 转向结束，锁定新航向
+                }
+            }
+            else if (drive_cmd_active && !heading_hold_enabled_)
+            {
+                capture_current_heading(); // 刚开始推直行，锁定当前航向
+            }
+            else if (!drive_cmd_active)
+            {
+                // 彻底停下时关闭锁头
+                heading_hold_enabled_ = false;
+                pid_heading_.reset();
+            }
         }
 
         // 腿高度控制 (aux1: -1.0 ~ +1.0 线性映射到 L_MIN_ ~ L_MAX_)
@@ -649,6 +726,23 @@ private:
 
         pitch_ = pitch;
         pitch_rate_raw_ = msg->angular_velocity.y;
+
+        // Yaw 航向角用于 Heading 外环
+        yaw_ = yaw;
+
+        // Yaw 角速度用于 Yaw-rate 内环
+        yaw_rate_raw_ = msg->angular_velocity.z;
+        if (!yaw_rate_filter_init_)
+        {
+            yaw_rate_filt_ = yaw_rate_raw_;
+            yaw_rate_filter_init_ = true;
+        }
+        else
+        {
+            yaw_rate_filt_ = low_pass_filter(
+                yaw_rate_raw_, yaw_rate_filt_, yaw_rate_alpha_);
+        }
+        yaw_rate_ = yaw_rate_filt_;
 
         // Roll 角低通滤波：避免姿态估计的小噪声直接变成左右腿差动高度
         if (!roll_filter_init_)
@@ -795,75 +889,192 @@ private:
     // ============================================================
     // 键盘控制
     //
+    // W : 前进
+    // S : 后退
+    // A : 左转
+    // D : 右转
+    // Space : 停止平移/转向
     // ↑ : 增加腿长 / 机身升高
     // ↓ : 减小腿长 / 机身降低
     // ============================================================
+    void capture_current_heading()
+    {
+        if (!imu_received_)
+            return;
+
+        target_heading_ = yaw_;
+        heading_error_ = 0.0;
+        pid_heading_.reset();
+        heading_hold_enabled_ = true;
+
+        RCLCPP_INFO(
+            this->get_logger(),
+            "锁定航向: %.2f deg",
+            target_heading_ * 180.0 / M_PI);
+    }
+
     void process_keyboard_input()
     {
         if (!keyboard_enabled_)
             return;
 
-        char buffer[32];
+        char buffer[64];
+        ssize_t n = 0;
 
-        ssize_t n = read(
-            STDIN_FILENO,
-            buffer,
-            sizeof(buffer));
-
-        if (n <= 0)
-            return;
-
-        for (ssize_t i = 0; i < n; ++i)
+        while ((n = read(STDIN_FILENO, buffer, sizeof(buffer))) > 0)
         {
-            // 检测方向键转义序列：
-            //
-            // ↑ : ESC [ A
-            // ↓ : ESC [ B
-            //
-            if (buffer[i] == '\x1B')
+            for (ssize_t i = 0; i < n; ++i)
             {
-                if (i + 2 >= n)
-                    continue;
+                const char c = buffer[i];
 
-                if (buffer[i + 1] != '[')
-                    continue;
-
-                // ==================== ↑ 上方向键 ====================
-                if (buffer[i + 2] == 'A')
+                // ==================== 方向键 ====================
+                if (c == '\x1B')
                 {
-                    target_height_ += keyboard_height_step_;
+                    if (i + 2 < n && buffer[i + 1] == '[')
+                    {
+                        if (buffer[i + 2] == 'A')
+                        {
+                            target_height_ = clamp_value(
+                                target_height_ + keyboard_height_step_,
+                                L_MIN_, L_MAX_);
 
-                    target_height_ = clamp_value(
-                        target_height_,
-                        L_MIN_,
-                        L_MAX_);
+                            RCLCPP_INFO(
+                                this->get_logger(),
+                                "↑ 机身升高: target_height=%.4f m",
+                                target_height_);
+                        }
+                        else if (buffer[i + 2] == 'B')
+                        {
+                            target_height_ = clamp_value(
+                                target_height_ - keyboard_height_step_,
+                                L_MIN_, L_MAX_);
 
-                    RCLCPP_INFO(
-                        this->get_logger(),
-                        "↑ 机身升高: target_height=%.4f m",
-                        target_height_);
+                            RCLCPP_INFO(
+                                this->get_logger(),
+                                "↓ 机身降低: target_height=%.4f m",
+                                target_height_);
+                        }
+
+                        i += 2;
+                    }
+                    continue;
                 }
 
-                // ==================== ↓ 下方向键 ====================
-                else if (buffer[i + 2] == 'B')
+                const auto now_key = std::chrono::steady_clock::now();
+
+                // ==================== W / S 前后运动 ====================
+                if (c == 'w' || c == 'W')
                 {
-                    target_height_ -= keyboard_height_step_;
+                    const bool was_drive_active = keyboard_drive_active_;
+                    target_speed_const_ = -walk_speed_;
+                    keyboard_drive_active_ = true;
+                    last_drive_key_time_ = now_key;
 
-                    target_height_ = clamp_value(
-                        target_height_,
-                        L_MIN_,
-                        L_MAX_);
+                    // 第一次开始直行时，锁定当前航向。
+                    if (!was_drive_active && !keyboard_turn_active_)
+                        capture_current_heading();
+                }
+                else if (c == 's' || c == 'S')
+                {
+                    const bool was_drive_active = keyboard_drive_active_;
+                    target_speed_const_ = walk_speed_;
+                    keyboard_drive_active_ = true;
+                    last_drive_key_time_ = now_key;
 
-                    RCLCPP_INFO(
-                        this->get_logger(),
-                        "↓ 机身降低: target_height=%.4f m",
-                        target_height_);
+                    if (!was_drive_active && !keyboard_turn_active_)
+                        capture_current_heading();
                 }
 
-                i += 2;
+                // ==================== A / D 主动转向 ====================
+                else if (c == 'a' || c == 'A')
+                {
+                    // A/D 转向期间关闭 Heading 外环，直接给 Yaw-rate 内环目标。
+                    heading_hold_enabled_ = false;
+                    target_yaw_rate_ = turn_speed_;
+                    keyboard_turn_active_ = true;
+                    last_turn_key_time_ = now_key;
+                }
+                else if (c == 'd' || c == 'D')
+                {
+                    heading_hold_enabled_ = false;
+                    target_yaw_rate_ = -turn_speed_;
+                    keyboard_turn_active_ = true;
+                    last_turn_key_time_ = now_key;
+                }
+
+                // ==================== Space 停止 ====================
+                else if (c == ' ')
+                {
+                    target_speed_const_ = 0.0;
+                    target_yaw_rate_ = 0.0;
+                    target_yaw_rate_smoothed_ = 0.0;
+                    yaw_pid_output_ma_ = 0.0;
+
+                    keyboard_drive_active_ = false;
+                    keyboard_turn_active_ = false;
+                    heading_hold_enabled_ = false;
+
+                    pid_heading_.reset();
+                    pid_yaw_.reset();
+
+                    RCLCPP_INFO(this->get_logger(), "Space: 停止移动与转向");
+                }
             }
         }
     }
+
+    // 终端无法直接得到 key-release。
+    // 利用系统按键自动重复刷新时间戳；停止收到按键后自动归零。
+    void update_keyboard_command_timeout()
+    {
+        if (!keyboard_enabled_)
+            return;
+
+        const auto now_key = std::chrono::steady_clock::now();
+
+        if (keyboard_drive_active_)
+        {
+            const double elapsed =
+                std::chrono::duration<double>(now_key - last_drive_key_time_).count();
+
+            if (elapsed > keyboard_command_timeout_)
+            {
+                keyboard_drive_active_ = false;
+                target_speed_const_ = 0.0;
+
+                // W/S 松开后不让机器人为了航向误差原地转向。
+                if (!keyboard_turn_active_)
+                {
+                    heading_hold_enabled_ = false;
+                    pid_heading_.reset();
+                }
+            }
+        }
+
+        if (keyboard_turn_active_)
+        {
+            const double elapsed =
+                std::chrono::duration<double>(now_key - last_turn_key_time_).count();
+
+            if (elapsed > keyboard_command_timeout_)
+            {
+                keyboard_turn_active_ = false;
+                target_yaw_rate_ = 0.0;
+
+                // A/D 松开：如果仍在 W/S 行驶，则锁定新的当前航向。
+                if (keyboard_drive_active_)
+                {
+                    capture_current_heading();
+                }
+                else
+                {
+                    heading_hold_enabled_ = false;
+                    pid_heading_.reset();
+                }
+            }
+        }
+    }
+
     void control_loop()
     {
         // 键盘输入独立于 IMU 处理
@@ -871,6 +1082,8 @@ private:
 
         if (!imu_received_)
             return;
+
+        update_keyboard_command_timeout();
 
         // 每20ms查询一次关节电流，每500ms刷新一次扭矩系数
         torque_query_tick_++;
@@ -928,6 +1141,16 @@ private:
             pid_speed_.reset();
             pid_angle_.reset();
             pid_gyro_.reset();
+            pid_heading_.reset();
+            pid_yaw_.reset();
+
+            heading_hold_enabled_ = false;
+            keyboard_drive_active_ = false;
+            keyboard_turn_active_ = false;
+            target_speed_const_ = 0.0;
+            target_yaw_rate_ = 0.0;
+            target_yaw_rate_smoothed_ = 0.0;
+            yaw_pid_output_ma_ = 0.0;
 
             roll_integral_ = 0.0;
             roll_delta_h_ = 0.0;
@@ -989,8 +1212,63 @@ private:
         double cmd_raw = pid_gyro_(gyro_error, dt_gyro);
         double cmd_x = clamp_value(cmd_raw * cmd_sign_, -max_cmd_x_, max_cmd_x_);
 
-        publish_cmd(cmd_x, target_yaw_rate_);
-        send_wheel_can(cmd_x, target_yaw_rate_);
+        // ============================================================
+        // Heading 外环 + Yaw-rate 内环
+        // ============================================================
+        double desired_yaw_rate = target_yaw_rate_;
+
+        if (heading_hold_enabled_ && !keyboard_turn_active_ && !rc_turn_active_)
+        {
+            heading_error_ = wrap_angle(target_heading_ - yaw_);
+
+            // 小误差不持续修正，减小左右轮高频差动。
+            double heading_error_for_pid = heading_error_;
+            if (std::abs(heading_error_for_pid) <= heading_deadband_)
+            {
+                heading_error_for_pid = 0.0;
+            }
+            else if (heading_error_for_pid > 0.0)
+            {
+                heading_error_for_pid -= heading_deadband_;
+            }
+            else
+            {
+                heading_error_for_pid += heading_deadband_;
+            }
+
+            // 不要做死区扣除，直接送入 PID：
+            desired_yaw_rate = pid_heading_(heading_error_for_pid, dt);
+            desired_yaw_rate = clamp_value(desired_yaw_rate, -turn_speed_, turn_speed_);
+        }
+        else
+        {
+            heading_error_ = 0.0;
+        }
+
+        // Yaw-rate 目标斜坡，避免 A/D 或 Heading 外环输出突然跳变。
+        const double yaw_rate_step = yaw_target_ramp_rate_ * dt;
+        if (target_yaw_rate_smoothed_ < desired_yaw_rate)
+        {
+            target_yaw_rate_smoothed_ = std::min(
+                target_yaw_rate_smoothed_ + yaw_rate_step,
+                desired_yaw_rate);
+        }
+        else if (target_yaw_rate_smoothed_ > desired_yaw_rate)
+        {
+            target_yaw_rate_smoothed_ = std::max(
+                target_yaw_rate_smoothed_ - yaw_rate_step,
+                desired_yaw_rate);
+        }
+
+        const double yaw_rate_error = target_yaw_rate_smoothed_ - yaw_rate_;
+        yaw_pid_output_ma_ = pid_yaw_(yaw_rate_error, dt) * yaw_cmd_sign_;
+        yaw_pid_output_ma_ = clamp_value(
+            yaw_pid_output_ma_,
+            -static_cast<double>(pid_yaw_.limit),
+            static_cast<double>(pid_yaw_.limit));
+
+        publish_cmd(cmd_x, target_yaw_rate_smoothed_);
+        send_wheel_can(cmd_x, yaw_pid_output_ma_);
         send_leg_can(dt);
 
         std_msgs::msg::Float64MultiArray telem_msg;
@@ -1013,7 +1291,13 @@ private:
             motor_left_knee_.current_feedback(),  // [15]
             motor_right_knee_.current_feedback(), // [16]
             motor_left_knee_.torque_constant(),   // [17]
-            motor_right_knee_.torque_constant()   // [18]
+            motor_right_knee_.torque_constant(),  // [18]
+            yaw_,                                 // [19] 实际航向角 Yaw (rad)
+            target_heading_,                      // [20] Heading Hold 目标航向 (rad)
+            yaw_rate_,                            // [21] 实际 Yaw 角速度 (rad/s)
+            target_yaw_rate_smoothed_,            // [22] 目标 Yaw 角速度 (rad/s)
+            yaw_pid_output_ma_,                   // [23] Yaw-rate PID 差动电流 (mA)
+            heading_error_                        // [24] Heading 误差 (rad)
         };
 
         telemetry_pub_->publish(telem_msg);
@@ -1103,8 +1387,11 @@ private:
         }
 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100,
-                             "[PID] pitch=%.3f vel=%.2f cmd=%.2f | roll=%.2f° dh=%.1fmm h=%.3f",
-                             pitch_, x_dot_, cmd_x, roll_ * 180.0 / M_PI, last_delta_h_ * 1000.0, current_height_);
+                             "[PID] pitch=%.3f vel=%.2f cmd=%.2f | roll=%.2f° dh=%.1fmm h=%.3f | yaw=%.1f/%.1f° rate=%.2f/%.2f diff=%.0fmA",
+                             pitch_, x_dot_, cmd_x, roll_ * 180.0 / M_PI,
+                             last_delta_h_ * 1000.0, current_height_,
+                             yaw_ * 180.0 / M_PI, target_heading_ * 180.0 / M_PI,
+                             yaw_rate_, target_yaw_rate_smoothed_, yaw_pid_output_ma_);
 
         RCLCPP_INFO_THROTTLE(
             this->get_logger(),
@@ -1147,14 +1434,14 @@ private:
 
         balance_offset_ = lerp(balance_offset_min_, balance_offset_max_, r);
 
-        pid_speed_.P = lerp(0.10f, 0.15f, r);
+        pid_speed_.P = lerp(0.13f, 0.18f, r);
         pid_speed_.I = lerp(0.01f, 0.05f, r);
         pid_speed_.D = lerp(0.0f, 0.0f, r);
         pid_speed_.limit = lerp(0.45f, 0.50f, r);
 
         pid_angle_.P = lerp(5.0f, 6.0f, r);
         pid_angle_.I = lerp(0.0f, 0.0f, r);
-        pid_angle_.D = lerp(0.0f, 0.05f, r);
+        pid_angle_.D = lerp(0.03f, 0.05f, r);
         pid_angle_.limit = lerp(3.0f, 5.0f, r);
 
         pid_gyro_.P = lerp(20.0f, 24.0f, r);
@@ -1278,7 +1565,7 @@ private:
 
         double ratio_l = clamp_value((h_left - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
         double ratio_r = clamp_value((h_right - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
-        double x_off_l = lerp(0.080, 0.077, ratio_l);
+        double x_off_l = lerp(0.070, 0.067, ratio_l);
         double x_off_r = lerp(0.070, 0.067, ratio_r);
 
         // 逆运动学求解
@@ -1420,13 +1707,20 @@ private:
         }
     }
 
-    void send_wheel_can(double cmd_x, double yaw_rate)
+    void send_wheel_can(double cmd_x, double diff_current_ma)
     {
-        int16_t base_torque = static_cast<int16_t>(cmd_x * 1000.0);
-        int16_t diff_torque = static_cast<int16_t>(yaw_rate * 500.0);
+        // Pitch 平衡环给出基础电流；Yaw-rate PID 给出左右轮差动电流。
+        const int base_torque = static_cast<int>(cmd_x * 1000.0);
+        const int diff_torque = static_cast<int>(diff_current_ma);
 
-        int16_t left_ma = base_torque + diff_torque;
-        int16_t right_ma = -base_torque + diff_torque;
+        int left_ma_i = base_torque + diff_torque;
+        int right_ma_i = -base_torque + diff_torque;
+
+        left_ma_i = std::max(-32767, std::min(32767, left_ma_i));
+        right_ma_i = std::max(-32767, std::min(32767, right_ma_i));
+
+        const int16_t left_ma = static_cast<int16_t>(left_ma_i);
+        const int16_t right_ma = static_cast<int16_t>(right_ma_i);
 
         left_cmd_ma_ = left_ma;
         right_cmd_ma_ = right_ma;
@@ -1454,6 +1748,7 @@ private:
 
     // PID
     bbot_real::PIDController pid_speed_, pid_angle_, pid_gyro_;
+    bbot_real::PIDController pid_heading_, pid_yaw_;
 
     // 订阅/发布
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -1530,10 +1825,32 @@ private:
     unsigned int loop_tick_ = 0;
     double target_pitch_alpha_ = 0.90;
 
-    // 遥控指令
+    // 遥控 / 键盘速度指令
     double target_speed_const_ = 0.0, target_speed_smoothed_ = 0.0;
-    double target_yaw_rate_ = 0.0;
     double walk_speed_, turn_speed_, speed_ramp_time_;
+
+    // ==================== Heading + Yaw-rate 转向双环 ====================
+    double yaw_ = 0.0;
+    double target_heading_ = 0.0;
+    double heading_error_ = 0.0;
+    double heading_deadband_ = 0.10 * M_PI / 180.0;
+    bool heading_hold_enabled_ = false;
+
+    double yaw_rate_raw_ = 0.0;
+    double yaw_rate_filt_ = 0.0;
+    double yaw_rate_ = 0.0;
+    bool yaw_rate_filter_init_ = false;
+    double yaw_rate_alpha_ = 0.20;
+
+    // A/D 或遥控器直接给出的人工 Yaw-rate 目标
+    double target_yaw_rate_ = 0.0;
+    // 经过斜坡后的目标 Yaw-rate，进入内环
+    double target_yaw_rate_smoothed_ = 0.0;
+    double yaw_target_ramp_rate_ = 2.0;
+
+    // Yaw-rate PID 最终输出的差动轮电流
+    double yaw_pid_output_ma_ = 0.0;
+    double yaw_cmd_sign_ = 1.0;
 
     // 腿部高度
     double L_MIN_, L_MAX_, current_height_, target_height_, leg_transition_speed_;
@@ -1554,6 +1871,13 @@ private:
 
     // 键盘功能是否成功初始化
     bool keyboard_enabled_ = false;
+
+    // WASD 在普通终端中没有 key-release，使用按键重复 + 超时模拟松键
+    bool keyboard_drive_active_ = false;
+    bool keyboard_turn_active_ = false;
+    double keyboard_command_timeout_ = 0.35;
+    std::chrono::steady_clock::time_point last_drive_key_time_ = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point last_turn_key_time_ = std::chrono::steady_clock::now();
 
     // 腿部控制
     std::string leg_mode_;
@@ -1631,6 +1955,8 @@ private:
     uint8_t error_left_knee_ = 0;
     uint8_t error_right_hip_ = 0;
     uint8_t error_right_knee_ = 0;
+
+    bool rc_turn_active_ = false;
 };
 
 int main(int argc, char **argv)

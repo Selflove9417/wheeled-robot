@@ -173,7 +173,7 @@ class IMUDriverNode(Node):
 def main():
     """节点入口函数，执行环境初始化、节点实例化以及自旋阻塞"""
     rclpy.init()
-    node = IMUDriverNode('/dev/ttyCH341USB0')
+    node = IMUDriverNode('/dev/imu')
 
     try:
         rclpy.spin(node)

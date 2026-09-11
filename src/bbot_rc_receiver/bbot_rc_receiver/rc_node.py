@@ -24,7 +24,7 @@ class CRSFNode(Node):
             10
         )
 
-        serial_port = "/dev/ttyCH341USB1"
+        serial_port = "/dev/rc"
         serial_baudrate = 420000
 
         serial_cfg = SerialConfig(

@@ -2,7 +2,7 @@
 # 启动命令
 ## 1. CAN总线初始化（启动时执行一次）
 
-sudo ip link set can0 up type can bitrate 1000000
+sudo ip link set can0 up type can bitrate 1000000  restart-ms 100
 
 
 ## 2. 编译

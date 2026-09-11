@@ -10,7 +10,7 @@ def generate_launch_description():
         name='imu',
 
         remappings=[('/imu/data_raw', '/imu/data')],
-        parameters=[{'port': '/dev/ttyCH341USB1'},
+        parameters=[{'port': '/dev/imu'},
                     {"baud": 230400}],
         output="screen"
     )

@@ -33,7 +33,7 @@ namespace bbot_real
 
         // ---- 限位 ----
         double L_MIN = 0.30; // 虚拟腿长最小值 (m)
-        double L_MAX = 0.45; // 虚拟腿长最大值 (m)
+        double L_MAX = 0.50; // 虚拟腿长最大值 (m)
         double g = 9.81;     // 重力加速度
 
         double hip_torque_max = 75.0;  // 髋关节峰值扭矩 (Nm)
