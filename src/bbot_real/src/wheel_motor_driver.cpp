@@ -158,6 +158,8 @@ namespace bbot_real
         if (!can_)
             return false;
 
+        estop_latched_ = false; // 重新使能后允许急停再次执行完整序列
+
         std::cout << "[ZLAC] 节点" << (int)node_id_ << " 开始使能序列..." << std::endl;
 
         // 1. NMT预操作
@@ -240,15 +242,22 @@ namespace bbot_real
     {
         enabled_ = false;
 
-        // 先清空 RPDO 扭矩缓冲，避免阻塞式 SDO 失败时残留力矩
+        // 每个周期都发：清空 RPDO 扭矩缓冲（非阻塞，持续保证零扭矩）
         uint8_t zero_data[8] = {};
         send_frame(0x200 + node_id_, zero_data, 8);
 
-        // 进入 NMT 预操作
-        send_nmt(0x80);
+        // NMT 预操作 + SDO Shutdown 只在首次进入急停时执行。
+        // write_sdo 会忙等应答最多 100ms，不能在 200Hz 控制循环里反复调用。
+        if (!estop_latched_)
+        {
+            estop_latched_ = true;
 
-        // 再通过 SDO 进入 Shutdown，清掉驱动内部状态
-        write_sdo(0x6040, 0x00, 0x0006, 2);
+            // 进入 NMT 预操作
+            send_nmt(0x80);
+
+            // 再通过 SDO 进入 Shutdown，清掉驱动内部状态
+            write_sdo(0x6040, 0x00, 0x0006, 2);
+        }
         return true;
     }
 

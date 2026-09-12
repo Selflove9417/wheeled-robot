@@ -80,6 +80,7 @@ namespace bbot_real
         std::shared_ptr<CanInterface> can_;
         uint8_t node_id_ = 5;
         bool enabled_ = false;
+        bool estop_latched_ = false; // 急停已执行过完整 SDO 序列（避免 200Hz 循环内反复忙等）
 
         /// 发送标准CAN帧（使用CANopen ID）
         bool send_frame(uint32_t can_id, const uint8_t *data, uint8_t len);

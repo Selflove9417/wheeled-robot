@@ -38,7 +38,8 @@ class CRSFNode(Node):
 
         serial_cfg = SerialConfig(
             port=serial_port,
-            baudrate=serial_baudrate
+            baudrate=serial_baudrate,
+            timeout=0.0  # 1ms 轮询场景用纯非阻塞读，避免无数据时阻塞 20ms
         )
 
         self.port = SerialPort(serial_cfg)
@@ -72,8 +73,10 @@ class CRSFNode(Node):
             on_channels=self.on_channels
         )
 
-        if not self.port.is_open:
-            self.port.open()
+        # 启动时串口可能尚未就绪：不阻塞节点启动，由控制循环周期性重连
+        if not self.port.ensure_open():
+            self.get_logger().warning(
+                f"串口 {serial_port} 未就绪，将每秒自动重试")
 
         self.get_logger().info(
             f"CRSF Receiver started on {serial_port} @ {serial_baudrate}"
@@ -90,6 +93,9 @@ class CRSFNode(Node):
             0.001,
             self.timer_callback
         )
+
+        # 串口重连节流时间戳
+        self._next_reconnect_try = 0.0
 
     def on_telemetry(self, msg: Float64MultiArray):
         """缓存控制器状态，写入 CRSF 回传状态容器。"""
@@ -113,14 +119,27 @@ class CRSFNode(Node):
 
     def timer_callback(self):
 
+        # 串口断开后每秒重试一次重连，避免 1ms 轮询打爆 open()
+        if not self.port.is_open:
+            now = time.monotonic()
+            if now < self._next_reconnect_try:
+                return
+            self._next_reconnect_try = now + 1.0
+            if not self.port.ensure_open():
+                return
+
         try:
             self.receiver._tick()
 
         except Exception as e:
-
+            # 运行中掉线（拔出等）：关闭句柄，下一秒由上面的重连逻辑恢复
             self.get_logger().error(
                 f"CRSF error: {e}"
             )
+            try:
+                self.port.close()
+            except Exception:
+                pass
 
     def normalize(self, ch):
 

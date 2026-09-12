@@ -1,6 +1,7 @@
 #include "bbot_real/can_interface.hpp"
 
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <unistd.h>
 #include <fcntl.h>
@@ -82,12 +83,27 @@ bool CanInterface::send(uint32_t can_id, const uint8_t * data, uint8_t len)
     std::memcpy(frame.data, data, len);
 
     ssize_t n = write(sock_fd_, &frame, sizeof(frame));
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS))
+    {
+        // TX 队列瞬时打满（200Hz 下每周期 5~9 帧）：立即重试一次
+        n = write(sock_fd_, &frame, sizeof(frame));
+    }
     if (n < 0)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)
-            return false;  // 缓冲区满，调用方重试
+        {
+            ++tx_dropped_;
+            ++tx_consecutive_drops_;
+            // 连续丢帧约 1 秒（200Hz）时告警一次，提示总线负载过高
+            if (tx_consecutive_drops_ == 200)
+                std::cerr << "[CAN] TX 队列持续打满，已连续丢弃 "
+                          << tx_consecutive_drops_ << " 帧，总线负载过高！"
+                          << std::endl;
+        }
         return false;
     }
+
+    tx_consecutive_drops_ = 0;
     return (n == sizeof(can_frame));
 }
 

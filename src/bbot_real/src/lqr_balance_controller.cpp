@@ -5,6 +5,8 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <thread>
+#include <atomic>
 
 #include <termios.h>
 #include <unistd.h>
@@ -353,6 +355,10 @@ public:
 
     ~LQRBalanceController()
     {
+        // 先等轮毂重使能线程退出，再操作 CAN，避免线程使用已关闭的 socket
+        if (wheel_reenable_thread_.joinable())
+            wheel_reenable_thread_.join();
+
         restore_keyboard();
 
         wheel_.emergency_stop();
@@ -773,6 +779,8 @@ private:
     {
         RCLCPP_INFO_ONCE(this->get_logger(), "已成功接收到第一帧 IMU 数据！");
 
+        last_imu_stamp_ = this->now();
+
         tf2::Quaternion q(msg->orientation.x, msg->orientation.y,
                           msg->orientation.z, msg->orientation.w);
         double roll, pitch, yaw;
@@ -1150,8 +1158,18 @@ private:
             }
         }
 
+        // IMU 断流看门狗： imu_received_ 只会置位一次，
+        // 断流后必须停止使用陈旧姿态输出电流
+        const bool imu_timed_out =
+            imu_received_ && (now - last_imu_stamp_).seconds() > 0.1;
+        if (imu_timed_out)
+        {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                                 "IMU 断流超过 100ms，触发保护停机");
+        }
+
         // 安全停机
-        if (std::abs(pitch_) > max_safe_pitch_ || is_emergency_stopped_ || wheel_over_speed_)
+        if (imu_timed_out || std::abs(pitch_) > max_safe_pitch_ || is_emergency_stopped_ || wheel_over_speed_)
         {
             wheel_.emergency_stop();
             publish_cmd(0.0, 0.0);
@@ -1194,8 +1212,6 @@ private:
             if (!joints_enabled_)
             {
                 RCLCPP_INFO(this->get_logger(), "进入安全角度，正在重新使能轮毂与全关节电机...");
-                if (!wheel_.is_enabled() && !wheel_.enable())
-                    RCLCPP_WARN(this->get_logger(), "轮毂电机重新使能失败");
                 motor_left_hip_.enable();
                 motor_left_knee_.enable();
                 motor_right_hip_.enable();
@@ -1213,6 +1229,21 @@ private:
                 roll_integral_ = 0.0;
                 roll_delta_h_ = 0.0;
                 wheel_over_speed_ = false;
+
+                // 轮毂使能序列含十几次阻塞式 SDO（合计近 1 秒），
+                // 放到后台线程执行，避免卡住 200Hz 控制循环。
+                // 期间 set_torque() 因 enabled_ == false 不会下发扭矩。
+                if (!wheel_.is_enabled() && !wheel_reenable_busy_)
+                {
+                    wheel_reenable_busy_ = true;
+                    if (wheel_reenable_thread_.joinable())
+                        wheel_reenable_thread_.join();
+                    wheel_reenable_thread_ = std::thread([this]() {
+                        if (!wheel_.enable())
+                            RCLCPP_WARN(this->get_logger(), "轮毂电机重新使能失败");
+                        wheel_reenable_busy_ = false;
+                    });
+                }
             }
         }
 
@@ -2050,6 +2081,13 @@ private:
 
     bool joints_enabled_ = false;
     uint32_t torque_query_tick_ = 0;
+
+    // 轮毂重使能后台化（enable 序列含阻塞式 SDO，不能占用 200Hz 循环）
+    std::atomic<bool> wheel_reenable_busy_{false};
+    std::thread wheel_reenable_thread_;
+
+    // IMU 看门狗时间戳
+    rclcpp::Time last_imu_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
     // Servo 类型1反馈请求计数器
     uint32_t temperature_request_tick_ = 0;

@@ -97,6 +97,21 @@ class SerialPort:
             self._ser.close()
         self._ser = None
 
+    def ensure_open(self) -> bool:
+        """确保串口已打开；未打开则尝试一次重连。
+
+        失败返回 False 而不抛异常，供调用方在轮询循环里周期性重试。
+        """
+        if self.is_open:
+            return True
+        try:
+            self.open()
+            logger.info("Serial %s (re)connected", self._cfg.port)
+            return True
+        except Exception as e:                                 # noqa: BLE001
+            logger.warning("Serial %s connect failed: %s", self._cfg.port, e)
+            return False
+
     # ------------------------------------------------------------------
     def read(self, max_bytes: int = 256) -> bytes:
         """非阻塞读取（受 timeout 限制）。返回任意长度（含 0）的字节。"""

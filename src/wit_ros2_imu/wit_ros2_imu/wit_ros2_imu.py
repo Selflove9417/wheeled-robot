@@ -19,6 +19,16 @@ angle_degree = [0.0, 0.0, 0.0]
 # 线程锁，用于保护多线程间全局变量的读写安全
 data_lock = threading.Lock()
 
+# 校验失败打印节流：坏帧风暴时不刷屏
+_last_check_fail_time = 0.0
+
+def _log_check_failure(frame_type):
+    global _last_check_fail_time
+    now = time.monotonic()
+    if now - _last_check_fail_time > 0.5:
+        _last_check_fail_time = now
+        print(f'{frame_type} Check failure')
+
 def hex_to_short(raw_data):
     """将串口接收到的2字节16进制原始数据组合并解包为有符号短整型(short)"""
     return list(struct.unpack("hhhh", bytearray(raw_data)))
@@ -54,26 +64,26 @@ def handle_serial_data(raw_data):
                 if check_sum(data_buff[0:10], data_buff[10]):
                     acceleration = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 16.0 * 9.8 for i in range(0, 3)]
                 else:
-                    print('0x51 Check failure')
+                    _log_check_failure('0x51')
             # 解析角速度数据 (输出单位: rad/s)
             elif buff[1] == 0x52:
                 if check_sum(data_buff[0:10], data_buff[10]):
                     angularVelocity = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 2000.0 * math.pi / 180.0 for i in range(0, 3)]
                 else:
-                    print('0x52 Check failure')
+                    _log_check_failure('0x52')
             # 解析欧拉角数据 (输出单位: 角度度数)
             elif buff[1] == 0x53:
                 if check_sum(data_buff[0:10], data_buff[10]):
                     angle_degree = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 180.0 for i in range(0, 3)]
                     angle_flag = True
                 else:
-                    print('0x53 Check failure')
+                    _log_check_failure('0x53')
             # 解析磁力计数据
             elif buff[1] == 0x54:
                 if check_sum(data_buff[0:10], data_buff[10]):
                     magnetometer = hex_to_short(data_buff[2:10])
                 else:
-                    print('0x54 Check failure')
+                    _log_check_failure('0x54')
             else:
                 buff = {}
                 key = 0
@@ -113,33 +123,46 @@ class IMUDriverNode(Node):
         self.driver_thread.start()
 
     def driver_loop(self, port_name):
-        """串口管理与接收的主循环，持续监听串口数据流并分发给解析函数"""
-        try:
-            wt_imu = serial.Serial(port=port_name, baudrate=230400, timeout=0.5)
-            if wt_imu.isOpen():
-                self.get_logger().info(f"\033[32mSerial port {port_name} opened successfully...\033[0m")
-            else:
-                wt_imu.open()
-                self.get_logger().info(f"\033[32mSerial port {port_name} opened successfully...\033[0m")
-        except Exception as e:
-            self.get_logger().error(f"Serial port opening failure: {e}")
-            return
+        """串口管理与接收主循环：断线后自动重连（指数退避，最长 10s）"""
+        retry_delay = 1.0
 
         while rclpy.ok():
             try:
-                buff_count = wt_imu.inWaiting()
-                if buff_count > 0:
-                    buff_data = wt_imu.read(buff_count)
-                    for i in range(0, buff_count):
-                        tag = handle_serial_data(buff_data[i])
-                        if tag:
-                            self.publish_imu_data()
-                else:
-                    # 串口无数据时短暂休眠，防止单核CPU被空转死循环占满
-                    time.sleep(0.001)
+                wt_imu = serial.Serial(port=port_name, baudrate=230400, timeout=0.5)
             except Exception as e:
-                self.get_logger().error(f"IMU loop exception: {e}")
-                break
+                self.get_logger().error(
+                    f"Serial port {port_name} open failed: {e}，{retry_delay:.1f}s 后重试")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 10.0)
+                continue
+
+            retry_delay = 1.0
+            self.get_logger().info(f"\033[32mSerial port {port_name} opened successfully...\033[0m")
+            # 丢弃可能残留的半帧数据，避免解析器错位
+            wt_imu.reset_input_buffer()
+
+            try:
+                while rclpy.ok():
+                    buff_count = wt_imu.inWaiting()
+                    if buff_count > 0:
+                        buff_data = wt_imu.read(buff_count)
+                        # 实际读到多少遍历多少：read() 超时短读时
+                        # len(buff_data) 可能小于 buff_count，按请求数遍历会越界
+                        for byte in buff_data:
+                            if handle_serial_data(byte):
+                                self.publish_imu_data()
+                    else:
+                        # 串口无数据时短暂休眠，防止单核CPU被空转死循环占满
+                        time.sleep(0.001)
+            except Exception as e:
+                self.get_logger().error(f"IMU loop exception: {e}，尝试重连串口")
+            finally:
+                try:
+                    wt_imu.close()
+                except Exception:
+                    pass
+
+            time.sleep(retry_delay)
 
     def publish_imu_data(self):
         """将解析出的最新运动学参数打包进规范的ROS消息，并发布到对应的Topic中"""
@@ -156,7 +179,7 @@ class IMUDriverNode(Node):
         
         self.imu_msg.angular_velocity.x = gyro_x
         self.imu_msg.angular_velocity.y = gyro_y
-        self.imu_msg.angular_velocity.z = gz = gyro_z
+        self.imu_msg.angular_velocity.z = gyro_z
         
         # 转换角度单位并生成四元数后填充消息体
         angle_radian = [local_angles[i] * math.pi / 180.0 for i in range(3)]

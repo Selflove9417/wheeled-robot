@@ -34,9 +34,14 @@ public:
 
     int socket_fd() const { return sock_fd_; }
 
+    /// 发送失败（TX队列满被丢弃）的累计帧数，用于监控总线负载
+    uint64_t tx_dropped() const { return tx_dropped_; }
+
 private:
     int sock_fd_ = -1;
     bool is_open_ = false;
+    uint64_t tx_dropped_ = 0;
+    uint64_t tx_consecutive_drops_ = 0;
 };
 
 }  // namespace bbot_real
