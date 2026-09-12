@@ -68,7 +68,7 @@ class TelemetrySource:
                  fixed_cfg: Dict,
                  intervals_cfg: Dict,
                  source: str = "dynamic") -> None:
-        if source not in ("static", "dynamic"):
+        if source not in ("static", "dynamic", "external"):
             raise ValueError(f"unknown telemetry source: {source}")
         self._source = source
         self._intervals: Dict[str, float] = {
@@ -128,7 +128,7 @@ class TelemetrySource:
     # ------------------------------------------------------------------
     def update(self, now: Optional[float] = None) -> None:
         """根据当前模式刷新一次状态。"""
-        if self._source == "static":
+        if self._source in ("static", "external"):
             return
 
         now = now if now is not None else time.monotonic()
@@ -180,6 +180,31 @@ class TelemetrySource:
         s.link.downlink_rssi_dbm = int(-70 + 20 * math.sin(t * 0.4 + 1.0))
         s.link.downlink_lq_pct = int(88 + 10 * math.sin(t * 0.6 + 0.5))
         s.link.downlink_snr_db = int(6 + 3 * math.sin(t * 0.3 + 0.7))
+
+    # ------------------------------------------------------------------
+    def apply_robot_data(self,
+                         speed_mps: float,
+                         height_m: float,
+                         pitch_rad: float,
+                         roll_rad: float) -> None:
+        """external 模式：写入机器人真实状态，只回传四个量。
+
+        帧映射（遥控器屏幕显示名）：
+        - ATTITUDE  -> P/R：pitch、roll（yaw 固定 0）
+        - GPS       -> GSpd：速度 m/s -> km/h（其余字段保持 0）
+        - BARO_ALT  -> Alt：腿高 m（0.1m 分辨率）
+        """
+        s = self.state
+
+        s.attitude.pitch_deg = math.degrees(pitch_rad)
+        s.attitude.roll_deg = math.degrees(roll_rad)
+        s.attitude.yaw_deg = 0.0
+
+        s.gps.ground_speed_kmh = abs(speed_mps) * 3.6
+
+        s.baro.altitude_m = height_m
+        s.baro.vertical_speed_mps = 0.0
+        s.vario.vertical_speed_mps = 0.0
 
     # ------------------------------------------------------------------
     def due_frames(self, now: Optional[float] = None) -> List[bytes]:

@@ -1,6 +1,9 @@
+import time
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Float64MultiArray
 
 from bbot_rc_receiver.crsf_demo.receiver import CrsfReceiver
 from bbot_rc_receiver.crsf_demo.serial_io import (
@@ -10,6 +13,12 @@ from bbot_rc_receiver.crsf_demo.serial_io import (
 from bbot_rc_receiver.crsf_demo.telemetry import (
     TelemetrySource
 )
+
+# 控制器 /bbot/telemetry 数据索引
+IDX_SPEED = 0        # 实际前进速度 (m/s)
+IDX_PITCH = 2        # 实际俯仰角 Pitch (rad)
+IDX_HEIGHT = 12      # 当前中心腿高 (m)
+IDX_ROLL = 28        # 实际横滚角 Roll (rad)
 
 
 class CRSFNode(Node):
@@ -34,35 +43,27 @@ class CRSFNode(Node):
 
         self.port = SerialPort(serial_cfg)
 
+        # 回传机器人真实状态：只回传速度、高度、pitch、roll。
+        # 帧映射：
+        #   ATTITUDE (10Hz)    -> P/R: pitch、roll
+        #   GPS (2Hz)          -> GSpd: 速度
+        #   BARO_ALTITUDE (2Hz)-> Alt: 腿高
+        # 其余帧类型（电池/链路统计/心跳/飞行模式/升降率）全部停发。
         self.telemetry = TelemetrySource(
-            fixed_cfg={
-                "battery": {
-                    "voltage_v": 16.8,
-                    "current_a": 2.0,
-                    "capacity_mah": 100,
-                    "remaining_pct": 95
-                },
-
-                "gps": {
-                    "latitude_deg": 35.6895,
-                    "longitude_deg": 139.6917,
-                    "altitude_m": 10,
-                    "satellites": 12
-                },
-
-                "flight_mode": "BBOT"
-            },
+            fixed_cfg={},
 
             intervals_cfg={
-                "battery": 1.0,
-                "gps": 1.0,
+                "battery": 0.0,
+                "gps": 0.5,
+                "vario": 0.0,
+                "baro_altitude": 0.5,
                 "attitude": 0.1,
-                "link_statistics": 1.0,
-                "flight_mode": 1.0,
-                "heartbeat": 1.0
+                "link_statistics": 0.0,
+                "flight_mode": 0.0,
+                "heartbeat": 0.0
             },
 
-            source="dynamic"
+            source="external"
         )
 
         self.receiver = CrsfReceiver(
@@ -78,9 +79,36 @@ class CRSFNode(Node):
             f"CRSF Receiver started on {serial_port} @ {serial_baudrate}"
         )
 
+        self.telemetry_sub = self.create_subscription(
+            Float64MultiArray,
+            '/bbot/telemetry',
+            self.on_telemetry,
+            10
+        )
+
         self.timer = self.create_timer(
             0.001,
             self.timer_callback
+        )
+
+    def on_telemetry(self, msg: Float64MultiArray):
+        """缓存控制器状态，写入 CRSF 回传状态容器。"""
+
+        data = msg.data
+        if len(data) <= IDX_HEIGHT:
+            return
+
+        speed = data[IDX_SPEED]
+        pitch = data[IDX_PITCH]
+        height = data[IDX_HEIGHT]
+        # [28] 是新加的索引，旧版本控制器没有，缺失时保持 0
+        roll = data[IDX_ROLL] if len(data) > IDX_ROLL else 0.0
+
+        self.telemetry.apply_robot_data(
+            speed_mps=speed,
+            height_m=height,
+            pitch_rad=pitch,
+            roll_rad=roll
         )
 
     def timer_callback(self):
