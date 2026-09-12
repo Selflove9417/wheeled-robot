@@ -36,10 +36,11 @@ ros2 launch bbot_real bringup.launch.py controller:=lqr   # LQR 控制器
 ros2 launch bbot_real bringup.launch.py controller:=pid   # PID 控制器
 ```
 
-### 或单独启动 PID 控制器
+### 或单独启动控制器（带 IMU + 遥控接收 + 延迟启动）
 
 ```bash
 ros2 launch bbot_real pid_balance.launch.py
+ros2 launch bbot_real lqr_balance.launch.py
 ros2 launch bbot_real pid_balance.launch.py can_interface:=can0
 ```
 
@@ -123,6 +124,7 @@ python3 plot_data.py --balance --stats          # 只画平衡跟踪（速度/�
 python3 plot_data.py --torque                   # 四关节力矩
 python3 plot_data.py --temp                     # 关节电机线圈/MOS 温度
 python3 plot_data.py --legs                     # 腿高 + 膝关节电流反馈
+python3 plot_data.py --steering                 # 转向环（横摆角/角速度跟踪 + 差动电流）
 
 # 指定时间窗口 / 输出文件名 / 数据目录
 python3 plot_data.py --balance --start 10 --end 40 --out run1.png
@@ -151,6 +153,19 @@ python3 plot_data.py --all --dir /path/to/logs --out run2.png
 | data[11] | 右膝力矩 (取反, Nm) | data[25] | 目标曲率 κ (1/m) |
 | data[12] | 中心腿高 (m) | data[26] | 转向用速度幅值 (m/s) |
 | data[13] | 左腿高 (m) | data[27] | Heading Hold 使能 (0/1) |
+| data[28] | 实际横滚角 Roll (rad) | | |
+
+### 遥控器回传（CRSF 遥测）
+
+`rc_node` 订阅 `/bbot/telemetry`，把真实状态回传给遥控器屏幕显示，只回传四个量：
+
+| 遥控器传感器 | CRSF 帧 | 内容 |
+|---|---|---|
+| P / R（姿态） | ATTITUDE 10Hz | pitch、roll（度） |
+| GSpd（GPS速度） | GPS 2Hz | 机器人速度 m/s→km/h（0.1km/h 分辨率） |
+| Alt（气压高度） | BARO_ALTITUDE 2Hz | 当前腿高 m（0.1m 分辨率） |
+
+电池 / 链路统计 / 心跳 / 飞行模式等其余帧类型全部停发。
 
 ---
 

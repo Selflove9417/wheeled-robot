@@ -93,6 +93,25 @@ LEG_DIAG_FILES = {
     "timestamp": "timestamp_leg_diag.txt",
 }
 
+# 转向环：横摆角/角速度目标值与实际值共用同一个时间戳文件
+STEERING_FILES = {
+    "yaw": {
+        "data": "yaw_data.txt",
+        "target": "target_yaw_data.txt",
+        "timestamp": "timestamp_yaw.txt",
+        "target_timestamp": "timestamp_yaw.txt",
+    },
+    "yaw_rate": {
+        "data": "yaw_rate_data.txt",
+        "target": "target_yaw_rate_data.txt",
+        "timestamp": "timestamp_yaw.txt",
+        "target_timestamp": "timestamp_yaw.txt",
+    },
+    "diff_current": "yaw_diff_current_data.txt",
+    "curvature": "yaw_curvature_data.txt",
+    "timestamp": "timestamp_yaw.txt",
+}
+
 ARGS = None  # 由 main() 填充，供 auto_ylim 使用
 
 
@@ -183,6 +202,27 @@ def process_motor(base):
     return motor
 
 
+def process_steering_extras(base):
+    """转向环单通道数据：差动电流 + 目标曲率，共用 yaw 时间戳。"""
+    diff = read_data(os.path.join(base, STEERING_FILES["diff_current"]),
+                     "yaw diff current")
+    curv = read_data(os.path.join(base, STEERING_FILES["curvature"]),
+                     "target curvature")
+    t = read_data(os.path.join(base, STEERING_FILES["timestamp"]),
+                  "steering time")
+
+    n = min(len(diff), len(curv), len(t))
+    if n == 0:
+        return {"diff": np.array([]), "curv": np.array([]),
+                "time": np.array([])}
+
+    return {
+        "diff": diff[:n],
+        "curv": curv[:n],
+        "time": relative_time(t, n),
+    }
+
+
 def process_channel_group(base, files, group_name):
     """通用处理：N 个数据通道 + 1 个共享时间戳文件（温度 / 腿部诊断）。"""
     group = {}
@@ -240,8 +280,8 @@ def add_stats_box(ax, time, data, target, unit):
         f"MaxE: {max_error:.4f} {unit}\n"
         f"N: {len(error)}"
     )
-    ax.text(0.98, 0.98, text, transform=ax.transAxes, fontsize=9,
-            verticalalignment="top", horizontalalignment="right",
+    ax.text(0.02, 0.98, text, transform=ax.transAxes, fontsize=9,
+            verticalalignment="top", horizontalalignment="left",
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
     return rmse, mae, max_error
 
@@ -473,6 +513,43 @@ def panel_knee_current(ax, datasets):
         auto_ylim(ax, all_time, np.concatenate(series))
 
 
+# ---------- 转向环 ----------
+def panel_yaw_heading(ax, datasets):
+    ds = datasets["yaw"]
+    if len(ds["data"]) == 0:
+        return
+    # unwrap 消除 ±180° 跳变，避免跨圈时画出竖线
+    ds = dict(ds)
+    ds["data"] = np.unwrap(ds["data"])
+    ds["target"] = np.unwrap(ds["target"])
+    plot_tracking(
+        ax, ds,
+        "Actual Yaw", "Heading Hold Target",
+        "Yaw (rad)", "Heading vs Heading Hold Target", "rad",
+        "#2ca02c", "#d62728")
+
+
+def panel_yaw_rate(ax, datasets):
+    plot_tracking(
+        ax, datasets["yaw_rate"],
+        "Actual Yaw Rate", "Target Yaw Rate",
+        "Yaw Rate (rad/s)", "Yaw Rate Tracking", "rad/s",
+        "#9467bd", "#8c564b")
+
+
+def panel_yaw_diff(ax, datasets):
+    extra = datasets["steering"]
+    if len(extra["time"]) == 0:
+        return
+    ax.plot(extra["time"], extra["diff"], label="Yaw Diff Current",
+            color="#17becf", lw=1.5)
+    ax.set_ylabel("Current (mA)", fontsize=11, fontweight="bold")
+    ax.set_title("Yaw Differential Wheel Current", fontsize=13, fontweight="bold")
+    ax.legend(loc="upper right", framealpha=0.9)
+    ax.grid(True, linestyle=":", alpha=0.6)
+    auto_ylim(ax, extra["time"], extra["diff"])
+
+
 # ===============================================================
 # 主流程
 # ===============================================================
@@ -498,6 +575,8 @@ def parse_args():
     group.add_argument("--torque", action="store_true", help="四关节力矩")
     group.add_argument("--temp", action="store_true", help="关节温度")
     group.add_argument("--legs", action="store_true", help="腿高/膝关节电流")
+    group.add_argument("--steering", action="store_true",
+                       help="转向环（横摆角/角速度跟踪 + 差动电流）")
     group.add_argument("--all", action="store_true", help="全部子图")
     return parser.parse_args()
 
@@ -510,12 +589,14 @@ def main():
     plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "Arial"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    any_group = ARGS.balance or ARGS.torque or ARGS.temp or ARGS.legs or ARGS.all
+    any_group = (ARGS.balance or ARGS.torque or ARGS.temp or ARGS.legs
+                 or ARGS.steering or ARGS.all)
     enable = {
         "balance": ARGS.balance or ARGS.all or not any_group,
         "torque": ARGS.torque or ARGS.all,
         "temp": ARGS.temp or ARGS.all,
         "legs": ARGS.legs or ARGS.all,
+        "steering": ARGS.steering or ARGS.all,
     }
 
     # 只加载需要的组
@@ -534,6 +615,11 @@ def main():
         datasets["leg_diag"] = process_channel_group(
             base, LEG_DIAG_FILES, "leg diagnostic")
         print_knee_kt_summary(datasets["leg_diag"])
+    if enable["steering"]:
+        datasets["yaw"] = process_dataset(base, STEERING_FILES["yaw"], "yaw")
+        datasets["yaw_rate"] = process_dataset(
+            base, STEERING_FILES["yaw_rate"], "yaw rate")
+        datasets["steering"] = process_steering_extras(base)
 
     panels = []
     if enable["balance"]:
@@ -549,6 +635,10 @@ def main():
     if enable["legs"]:
         panels += [("Leg Height", panel_leg_height, "leg_diag"),
                    ("Knee Current", panel_knee_current, "leg_diag")]
+    if enable["steering"]:
+        panels += [("Yaw Heading", panel_yaw_heading, "yaw"),
+                   ("Yaw Rate", panel_yaw_rate, "yaw_rate"),
+                   ("Yaw Diff Current", panel_yaw_diff, "steering")]
 
     # 数据为空的组直接跳过对应子图
     def has_data(key):

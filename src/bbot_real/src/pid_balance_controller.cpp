@@ -311,6 +311,16 @@ public:
 
             log_timestamp_left_current_.open(log_dir + "timestamp_left_current.txt");
             log_timestamp_right_current_.open(log_dir + "timestamp_right_current.txt");
+
+            // ==================== 转向环日志 ====================
+            log_yaw_.open(log_dir + "yaw_data.txt");
+            log_target_yaw_.open(log_dir + "target_yaw_data.txt");
+            log_yaw_rate_.open(log_dir + "yaw_rate_data.txt");
+            log_target_yaw_rate_.open(log_dir + "target_yaw_rate_data.txt");
+            log_yaw_diff_current_.open(log_dir + "yaw_diff_current_data.txt");
+            log_yaw_curvature_.open(log_dir + "yaw_curvature_data.txt");
+            log_timestamp_yaw_.open(log_dir + "timestamp_yaw.txt");
+
             logging_enabled_ = true;
         }
         catch (const std::exception &e)
@@ -385,6 +395,21 @@ public:
             log_timestamp_left_current_.close();
         if (log_timestamp_right_current_.is_open())
             log_timestamp_right_current_.close();
+
+        if (log_yaw_.is_open())
+            log_yaw_.close();
+        if (log_target_yaw_.is_open())
+            log_target_yaw_.close();
+        if (log_yaw_rate_.is_open())
+            log_yaw_rate_.close();
+        if (log_target_yaw_rate_.is_open())
+            log_target_yaw_rate_.close();
+        if (log_yaw_diff_current_.is_open())
+            log_yaw_diff_current_.close();
+        if (log_yaw_curvature_.is_open())
+            log_yaw_curvature_.close();
+        if (log_timestamp_yaw_.is_open())
+            log_timestamp_yaw_.close();
         if (log_hip_left_torque_.is_open())
             log_hip_left_torque_.close();
         if (log_knee_left_torque_.is_open())
@@ -1308,7 +1333,8 @@ private:
             heading_error_,                       // [24] Heading Hold 航向误差 (rad)
             target_curvature_,                    // [25] 目标曲率 kappa (1/m)
             steering_speed_mps_,                  // [26] 曲率换算使用的纵向目标速度幅值 (m/s)
-            heading_hold_enabled_ ? 1.0 : 0.0     // [27] Heading Hold 是否启用
+            heading_hold_enabled_ ? 1.0 : 0.0,    // [27] Heading Hold 是否启用
+            roll_                                 // [28] 实际横滚角 Roll (rad)
         };
 
         telemetry_pub_->publish(telem_msg);
@@ -1335,6 +1361,15 @@ private:
             log_right_current_ << right_cmd_ma_ << "\n";
             log_timestamp_left_current_ << t << "\n";
             log_timestamp_right_current_ << t << "\n";
+
+            // ==================== 转向环日志 ====================
+            log_yaw_ << yaw_ << "\n";
+            log_target_yaw_ << target_heading_ << "\n";
+            log_yaw_rate_ << yaw_rate_ << "\n";
+            log_target_yaw_rate_ << target_yaw_rate_smoothed_ << "\n";
+            log_yaw_diff_current_ << yaw_pid_output_ma_ << "\n";
+            log_yaw_curvature_ << target_curvature_ << "\n";
+            log_timestamp_yaw_ << t << "\n";
 
             log_hip_left_torque_ << motor_left_hip_.torque_feedback() << "\n";
             log_knee_left_torque_ << motor_left_knee_.torque_feedback() << "\n";
@@ -1919,6 +1954,12 @@ private:
     std::ofstream log_speed_, log_target_speed_, log_timestamp_speed_, log_timestamp_target_speed_;
     std::ofstream log_gyro_, log_target_gyro_, log_timestamp_gyro_, log_timestamp_target_gyro_;
     std::ofstream log_left_current_, log_right_current_, log_timestamp_left_current_, log_timestamp_right_current_;
+
+    // 转向环日志
+    std::ofstream log_yaw_, log_target_yaw_;
+    std::ofstream log_yaw_rate_, log_target_yaw_rate_;
+    std::ofstream log_yaw_diff_current_, log_yaw_curvature_;
+    std::ofstream log_timestamp_yaw_;
     std::ofstream log_hip_left_torque_;
     std::ofstream log_knee_left_torque_;
     std::ofstream log_hip_right_torque_;
