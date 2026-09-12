@@ -20,3 +20,9 @@ __pycache__/
 src/bbot_real/src/data_logs/*.txt
 src/bbot_real_lock/src/data_logs/*.txt
 
+
+# ZCode 会话文件
+.zcode/
+
+# data_logs 生成的图片
+src/bbot_real/src/data_logs/*.png
