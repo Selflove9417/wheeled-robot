@@ -94,7 +94,7 @@ public:
             yaw_rate_pid.ramp, yaw_rate_pid.limit);
 
         // 平衡参数
-        balance_offset_min_ = -3.5 * M_PI / 180.0; // 蹲伏时的平衡角
+        balance_offset_min_ = -4.0 * M_PI / 180.0; // 蹲伏时的平衡角
         balance_offset_max_ = -2.0 * M_PI / 180.0; // 站立时的平衡角
 
         cmd_sign_ = 1.0;
@@ -116,8 +116,8 @@ public:
 
         // 直行航向保持：只使用 P 外环，不使用 I/D。
         // heading_error(rad) -> target_yaw_rate(rad/s)
-        heading_kp_ = 1.0;
-        heading_rate_limit_ = 0.25;      // 直线纠偏最大横摆角速度 rad/s
+        heading_kp_ = 7.0;
+        heading_rate_limit_ = 0.30;      // 直线纠偏最大横摆角速度 rad/s
         heading_drive_threshold_ = 0.01; // 只有存在有效行驶指令时才启用 Heading Hold
 
         keyboard_command_timeout_ = 0.35; // WASD 最后一次按键后的自动归零时间
@@ -1218,11 +1218,11 @@ private:
                     wheel_reenable_busy_ = true;
                     if (wheel_reenable_thread_.joinable())
                         wheel_reenable_thread_.join();
-                    wheel_reenable_thread_ = std::thread([this]() {
+                    wheel_reenable_thread_ = std::thread([this]()
+                                                         {
                         if (!wheel_.enable())
                             RCLCPP_WARN(this->get_logger(), "轮毂电机重新使能失败");
-                        wheel_reenable_busy_ = false;
-                    });
+                        wheel_reenable_busy_ = false; });
                 }
             }
         }
@@ -1275,7 +1275,7 @@ private:
 
         if (curvature_turn_active)
         {
-            // 人工转向：严格按 Word 的曲率关系生成目标横摆角速度。
+            // 人工转向：严格按曲率关系生成目标横摆角速度。
             target_yaw_rate_ = target_curvature_ * steering_speed_mps_;
             target_yaw_rate_ = clamp_value(
                 target_yaw_rate_, -max_yaw_rate_, max_yaw_rate_);
@@ -1636,7 +1636,7 @@ private:
 
         double ratio_l = clamp_value((h_left - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
         double ratio_r = clamp_value((h_right - L_MIN_) / (L_MAX_ - L_MIN_), 0.0, 1.0);
-        double x_off_l = lerp(0.070, 0.067, ratio_l);
+        double x_off_l = lerp(0.060, 0.057, ratio_l);
         double x_off_r = lerp(0.070, 0.067, ratio_r);
 
         // 逆运动学求解
